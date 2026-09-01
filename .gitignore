@@ -1,0 +1,30 @@
+# Environment & Secrets
+*.env
+.env.*
+
+# Datasets & Large Data Files
+dataset/
+dataset/**
+data/
+data/**
+*.zip
+*.tar.gz
+*.7z
+
+# MATLAB Autosaves & Crash Dumps
+*.asv
+*.m~
+*.mat~
+slprj/
+*.slxc
+
+# Generated Reports & Scratch Files
+reports/
+reports/**
+*.html
+report_*.png
+
+# OS Specific
+Thumbs.db
+.DS_Store
+Desktop.ini
