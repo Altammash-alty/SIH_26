@@ -49,22 +49,17 @@ initialLearnRate = 1e-4;
 
 %% 2. Check Data Directory
 if ~exist(dataDir, 'dir')
-    fprintf('[WARNING] Data directory "%s" was not found.\n', dataDir);
-    fprintf('Please place your dataset in "%s" or update the dataDir path in this script.\n\n', dataDir);
+    fprintf('[ERROR] Training dataset directory "%s" was not found.\n', dataDir);
+    fprintf('This script requires a real training dataset only.\n');
+    fprintf('Use a folder such as: data/idrid/grading/train/images or a separate real training set.\n\n');
     fprintf('Expected folder structure:\n');
     fprintf('  %s/0/  (No DR images)\n', dataDir);
     fprintf('  %s/1/  (Mild NPDR images)\n', dataDir);
     fprintf('  %s/2/  (Moderate NPDR images)\n', dataDir);
     fprintf('  %s/3/  (Severe NPDR images)\n', dataDir);
     fprintf('  %s/4/  (Proliferative DR images)\n\n', dataDir);
-    
-    choice = input('Would you like to generate a small synthetic dataset in ./data/train for demonstration? (y/n): ', 's');
-    if strcmpi(choice, 'y')
-        generateSampleDataset(dataDir, 25);
-    else
-        fprintf('Exiting. Update dataDir to your dataset location and rerun train_classifier.m\n');
-        return;
-    end
+    fprintf('Exiting without generating synthetic data. Update dataDir to a real dataset and rerun train_classifier.m\n');
+    return;
 end
 
 %% 3. Load Dataset into MATLAB imageDatastore
@@ -239,42 +234,4 @@ fprintf(' Training & Reference Calibration Complete.\n');
 fprintf(' Run "test_full_routing" or "run_pipeline" to evaluate on test images.\n');
 fprintf('====================================================================\n');
 
-%% Local Helper: Synthetic Dataset Generator for Testing
-function generateSampleDataset(baseDir, numPerClass)
-    fprintf('Generating %d sample images per class in %s...\n', numPerClass, baseDir);
-    for c = 0:4
-        classDir = fullfile(baseDir, num2str(c));
-        if ~exist(classDir, 'dir'), mkdir(classDir); end
-        
-        for k = 1:numPerClass
-            img = createSampleFundus(256, c, k);
-            fName = fullfile(classDir, sprintf('sample_grade%d_%03d.png', c, k));
-            imwrite(img, fName);
-        end
-    end
-    fprintf('Sample dataset successfully created!\n');
-end
 
-function img = createSampleFundus(imgSize, grade, seed)
-    rng(grade * 100 + seed);
-    [X, Y] = meshgrid(1:imgSize, 1:imgSize);
-    centerX = imgSize / 2; centerY = imgSize / 2;
-    radius = imgSize * 0.44;
-    dist = sqrt((X - centerX).^2 + (Y - centerY).^2);
-    mask = dist <= radius;
-    
-    R = 0.75 * mask; G = 0.38 * mask; B = 0.08 * mask;
-    % Add dark lesions proportional to grade
-    if grade > 0
-        numLesions = grade * 4;
-        for l = 1:numLesions
-            lx = round(centerX + (rand() - 0.5) * imgSize * 0.6);
-            ly = round(centerY + (rand() - 0.5) * imgSize * 0.6);
-            if lx > 5 && lx < imgSize-5 && ly > 5 && ly < imgSize-5
-                R(ly-2:ly+2, lx-2:lx+2) = 0.2;
-                G(ly-2:ly+2, lx-2:lx+2) = 0.05;
-            end
-        end
-    end
-    img = cat(3, R, G, B);
-end

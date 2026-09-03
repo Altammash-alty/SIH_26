@@ -52,12 +52,12 @@ function refStats = buildReferenceStats(imageSource, outputPath, cfg)
         lambda = cfg.ood.regCovariance;
     end
 
-    % 2. Acquire or generate training-cohort images
+    % 2. Acquire training-cohort images from a real dataset only
     imageArray = {};
 
     if nargin < 1 || isempty(imageSource)
-        fprintf('[INFO] No image folder provided. Generating calibration cohort of 40 representative fundus variations...\n');
-        imageArray = generateCalibrationCohort(40);
+        error('buildReferenceStats:MissingImageSource', ...
+            'A real training-image directory or image cell array is required. Use ood.buildReferenceStats(''data/idrid/grading/train/images'', ...) without synthetic fallback.');
     elseif ischar(imageSource) || isstring(imageSource)
         if isfolder(imageSource)
             fprintf('[INFO] Scanning reference images from directory: %s\n', imageSource);
@@ -66,20 +66,19 @@ function refStats = buildReferenceStats(imageSource, outputPath, cfg)
                         dir(fullfile(imageSource, '*.jpeg')); ...
                         dir(fullfile(imageSource, '*.tif'))];
             if isempty(fileList)
-                warning('buildReferenceStats:NoImagesFound', ...
-                    'No image files found in %s. Falling back to synthetic calibration cohort.', imageSource);
-                imageArray = generateCalibrationCohort(40);
-            else
-                for k = 1:numel(fileList)
-                    fPath = fullfile(fileList(k).folder, fileList(k).name);
-                    try
-                        imgK = imread(fPath);
-                        % Enhance image via Stage 2 preprocessing for consistency
-                        enhancedK = preprocess.enhanceImage(imgK, cfg);
-                        imageArray{end+1} = enhancedK;
-                    catch ME
-                        fprintf('[WARNING] Failed to read/process %s: %s\n', fPath, ME.message);
-                    end
+                error('buildReferenceStats:NoImagesFound', ...
+                    'No real image files were found in %s. Please point to the actual training dataset and do not use synthetic fallback data.', imageSource);
+            end
+
+            for k = 1:numel(fileList)
+                fPath = fullfile(fileList(k).folder, fileList(k).name);
+                try
+                    imgK = imread(fPath);
+                    % Enhance image via Stage 2 preprocessing for consistency
+                    enhancedK = preprocess.enhanceImage(imgK, cfg);
+                    imageArray{end+1} = enhancedK;
+                catch ME
+                    fprintf('[WARNING] Failed to read/process %s: %s\n', fPath, ME.message);
                 end
             end
         else
@@ -87,6 +86,9 @@ function refStats = buildReferenceStats(imageSource, outputPath, cfg)
         end
     elseif iscell(imageSource)
         imageArray = imageSource;
+    else
+        error('buildReferenceStats:UnsupportedSource', ...
+            'imageSource must be a real directory path or a cell array of images. Synthetic cohorts are not allowed.');
     end
 
     nImages = numel(imageArray);
@@ -136,93 +138,4 @@ function refStats = buildReferenceStats(imageSource, outputPath, cfg)
         fprintf('[SUCCESS] Baseline reference statistics successfully saved to: %s\n', outputPath);
     end
 
-end
-
-%% Local Helper: Synthetic Calibration Cohort Generator
-function cohort = generateCalibrationCohort(N)
-    % Generates N diverse, physiologically plausible synthetic retinal images
-    % covering realistic pigmentation, vessel topologies, and flash variations.
-    cohort = cell(1, N);
-    
-    for i = 1:N
-        % Randomize physiological parameters
-        baseR = 0.75 + 0.10 * (rand() - 0.5);
-        baseG = 0.38 + 0.08 * (rand() - 0.5);
-        baseB = 0.08 + 0.04 * (rand() - 0.5);
-        noiseLev = 0.010 + 0.008 * rand();
-        
-        img = createParametricFundus(384, baseR, baseG, baseB, noiseLev, i);
-        % Apply Stage 2 enhancement so stats match preprocessed distribution
-        enhanced = preprocess.enhanceImage(img);
-        cohort{i} = enhanced;
-    end
-end
-
-function fundusImg = createParametricFundus(imgSize, rBase, gBase, bBase, noiseAmp, seed)
-    rng(seed * 101);
-    [X, Y] = meshgrid(1:imgSize, 1:imgSize);
-    centerX = imgSize / 2;
-    centerY = imgSize / 2;
-    radius = imgSize * 0.44;
-
-    distFromCenter = sqrt((X - centerX).^2 + (Y - centerY).^2);
-    fovMask = distFromCenter <= radius;
-
-    radialFalloff = max(0, 1.0 - 0.30 * (distFromCenter / radius).^2);
-    radialFalloff(~fovMask) = 0;
-
-    R = (rBase + 0.04 * sin(X/25) .* cos(Y/25)) .* radialFalloff;
-    G = (gBase + 0.03 * cos(X/20) .* sin(Y/20)) .* radialFalloff;
-    B = (bBase + 0.02 * sin(X/35)) .* radialFalloff;
-
-    % Optic Disc
-    discX = centerX - imgSize * 0.20;
-    discY = centerY;
-    discRadius = imgSize * 0.075;
-    distDisc = sqrt((X - discX).^2 + (Y - discY).^2);
-    discSoft = max(0, 1.0 - (distDisc / discRadius).^2) .* (distDisc <= discRadius);
-
-    R = R + 0.18 * discSoft;
-    G = G + 0.38 * discSoft;
-    B = B + 0.22 * discSoft;
-
-    % Retinal blood vessels
-    vesselTree = zeros(imgSize, imgSize);
-    t = linspace(0, 1, 200);
-    arcX_sup = discX + t * (imgSize * 0.55);
-    arcY_sup = discY - (imgSize * 0.35) * sin(t * pi * 0.85);
-    arcX_inf = discX + t * (imgSize * 0.55);
-    arcY_inf = discY + (imgSize * 0.35) * sin(t * pi * 0.85);
-
-    branches = { [arcX_sup; arcY_sup], [arcX_inf; arcY_inf] };
-    for b = 1:numel(branches)
-        pts = branches{b};
-        for k = 1:size(pts, 2)
-            px = round(pts(1, k));
-            py = round(pts(2, k));
-            if px > 2 && px < (imgSize - 2) && py > 2 && py < (imgSize - 2)
-                vesselTree(py-1:py+1, px-1:px+1) = 1;
-            end
-        end
-    end
-    vesselTree = imgaussfilt(vesselTree, 0.7);
-    vesselTree(~fovMask) = 0;
-
-    R = R - 0.22 * vesselTree;
-    G = G - 0.32 * vesselTree;
-    B = B - 0.12 * vesselTree;
-
-    % Sensor noise
-    noise = randn(imgSize, imgSize) * noiseAmp;
-    noise(~fovMask) = 0;
-
-    R = max(0, min(1, R + noise));
-    G = max(0, min(1, G + noise));
-    B = max(0, min(1, B + noise));
-
-    R(~fovMask) = 0;
-    G(~fovMask) = 0;
-    B(~fovMask) = 0;
-
-    fundusImg = cat(3, R, G, B);
 end

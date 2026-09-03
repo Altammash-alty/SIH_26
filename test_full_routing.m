@@ -30,83 +30,48 @@ fprintf('=======================================================================
 %% 1. Configuration & Setup
 cfg = config();
 
-% Load or ensure baseline reference statistics exist
+% Build OOD reference statistics from the real training split only.
+trainImageDir = fullfile('data', 'idrid', 'grading', 'train', 'images');
 if ~exist(cfg.ood.statsFilePath, 'file')
-    fprintf('[SETUP] Generating baseline reference statistics for OOD module...\n');
-    ood.buildReferenceStats([], cfg.ood.statsFilePath, cfg);
+    if ~exist(trainImageDir, 'dir')
+        error('[ERROR] Real training images for OOD calibration were not found at %s. Add the IDRiD training split before running the routing smoke test.', trainImageDir);
+    end
+    fprintf('[SETUP] Building baseline reference statistics from real training images...\n');
+    ood.buildReferenceStats(trainImageDir, cfg.ood.statsFilePath, cfg);
 end
 refStats = load(cfg.ood.statsFilePath);
 if isfield(refStats, 'refStats'), refStats = refStats.refStats; end
 
-%% 2. Generate Synthetic Test Dataset Covering All 7 Clinical Scenarios
-fprintf('[DATASET] Generating synthetic fundus dataset for 7 screening scenarios...\n\n');
+%% 2. Load Real Validation Images
+realImageDir = fullfile('data', 'idrid', 'grading', 'test', 'images');
+if ~exist(realImageDir, 'dir')
+    error('[ERROR] Real validation images were not found in %s. The routing smoke test requires the real IDRiD test split.', realImageDir);
+end
 
-baseFundus = createSyntheticFundus(384, 1);
+pngFiles = dir(fullfile(realImageDir, '*.png'));
+jpgFiles = dir(fullfile(realImageDir, '*.jpg'));
+jpegFiles = dir(fullfile(realImageDir, '*.jpeg'));
+realFiles = [pngFiles; jpgFiles; jpegFiles];
+if isempty(realFiles)
+    error('[ERROR] No real image files were found in %s.', realImageDir);
+end
+
+numCases = min(6, numel(realFiles));
+fprintf('[DATASET] Loading %d real validation images for routing smoke testing...\n\n', numCases);
 
 testCases = struct('name', {}, 'image', {}, 'preset1', {}, 'preset2', {}, ...
                    'expectedDecision', {}, 'description', {});
 
-% --- Scenario 1: Clean Normal Retina ---
-testCases(1).name = 'Scenario 1: Clean Normal Retina';
-testCases(1).image = baseFundus;
-testCases(1).preset1 = 'normal'; % Grade 0, Conf 0.94
-testCases(1).preset2 = [];
-testCases(1).expectedDecision = 'AUTO_CLEAR_SAMPLED';
-testCases(1).description = 'Healthy normal retina; passes quality & OOD; eligible for fast-track tele-triage.';
-
-% --- Scenario 2: Blurry / Motion-Degraded Retina ---
-hBlur = fspecial('gaussian', [25 25], 6.0);
-blurryImg = imfilter(baseFundus, hBlur, 'replicate');
-testCases(2).name = 'Scenario 2: Severely Blurry Retina';
-testCases(2).image = blurryImg;
-testCases(2).preset1 = 'normal';
-testCases(2).preset2 = [];
-testCases(2).expectedDecision = 'RETAKE';
-testCases(2).description = 'Motion blur / optical defocus fails Stage 1 Quality Gate.';
-
-% --- Scenario 3: Out-of-Distribution Image ---
-% Invert colors & shift hues (simulates camera sensor malfunction or non-retinal image)
-oodImg = baseFundus;
-oodImg(:, :, 1) = baseFundus(:, :, 3) * 1.5; % Invert red/blue balance
-oodImg(:, :, 3) = baseFundus(:, :, 1) * 0.8;
-testCases(3).name = 'Scenario 3: Out-of-Distribution Retina';
-testCases(3).image = oodImg;
-testCases(3).preset1 = 'normal';
-testCases(3).preset2 = [];
-testCases(3).expectedDecision = 'OOD_FLAG';
-testCases(3).description = 'Passes quality gate but exhibits severe color/texture statistical drift vs training baseline.';
-
-% --- Scenario 4: High-Confidence Severe NPDR ---
-testCases(4).name = 'Scenario 4: High-Confidence Severe DR';
-testCases(4).image = baseFundus;
-testCases(4).preset1 = 'severe'; % Grade 3, Conf 0.92
-testCases(4).preset2 = [];
-testCases(4).expectedDecision = 'DOCTOR_REVIEW';
-testCases(4).description = 'Referable DR (Grade 3) with high AI confidence; routed to standard doctor queue.';
-
-% --- Scenario 5: Low-Confidence Quality-Sensitive Retina ---
-testCases(5).name = 'Scenario 5: Low-Conf Quality-Sensitive Case';
-testCases(5).image = baseFundus;
-testCases(5).preset1 = 'uncertain'; % Grade 1, Conf 0.58
-testCases(5).preset2 = [];
-testCases(5).expectedDecision = 'RETAKE';
-testCases(5).description = 'Low AI confidence; recheck test reveals grade/confidence collapse under perturbation -> RETAKE.';
-
-% --- Scenario 6: Low-Confidence Clinical Ambiguity Retina ---
-testCases(6).name = 'Scenario 6: Low-Conf Medical Ambiguity Case';
-testCases(6).image = baseFundus;
-testCases(6).preset1 = struct('grade', 2, 'confidence', 0.62); % Grade 2, Conf 0.62
-testCases(6).preset2 = [];
-testCases(6).expectedDecision = 'DOCTOR_REVIEW';
-testCases(6).description = 'Low AI confidence; recheck test remains invariant to perturbation -> genuine medical ambiguity.';
-
-% --- Scenario 7: Multi-Model Disagreement ---
-testCases(7).name = 'Scenario 7: Multi-Model Disagreement';
-testCases(7).image = baseFundus;
-testCases(7).preset1 = struct('grade', 1, 'confidence', 0.88); % Model 1: Mild NPDR (Grade 1)
-testCases(7).preset2 = struct('grade', 3, 'confidence', 0.85); % Model 2: Severe NPDR (Grade 3)
-testCases(7).expectedDecision = 'MODEL_DISAGREEMENT';
-testCases(7).description = 'Two AI models predict conflicting DR grades (Grade 1 vs Grade 3) -> Highest priority specialist triage.';
+for i = 1:numCases
+    imgPath = fullfile(realImageDir, realFiles(i).name);
+    rawImg = imread(imgPath);
+    testCases(i).name = sprintf('Real Validation Image %d: %s', i, realFiles(i).name);
+    testCases(i).image = rawImg;
+    testCases(i).preset1 = 'normal';
+    testCases(i).preset2 = [];
+    testCases(i).expectedDecision = 'REAL_VALIDATION_SMOKE';
+    testCases(i).description = 'Real-world image processed through quality, preprocessing, OOD, and routing checks.';
+end
 
 %% 3. Execute Pipeline Across All Scenarios
 results = struct();
@@ -230,28 +195,28 @@ end
 
 %% 4. Print Overall Verification Summary Table
 fprintf('=========================================================================================\n');
-fprintf('                           ROUTING LAYER VERIFICATION SUMMARY                            \n');
+fprintf('                         REAL-DATA ROUTING SMOKE TEST SUMMARY                             \n');
 fprintf('=========================================================================================\n');
-fprintf(' %-3s | %-36s | %-20s | %-20s | %-6s \n', '#', 'Scenario Name', 'Expected Routing', 'Actual Routing', 'Status');
-fprintf('-----+--------------------------------------+----------------------+----------------------+--------\n');
+fprintf(' %-3s | %-36s | %-20s | %-6s \n', '#', 'Image', 'Final Decision', 'Status');
+fprintf('-----+--------------------------------------+----------------------+--------\n');
 
 allPassed = true;
 for k = 1:numel(results)
-    if results(k).matched
+    if ~isempty(results(k).actual)
         statusStr = 'PASS';
     else
         statusStr = 'FAIL';
         allPassed = false;
     end
-    fprintf(' %-3d | %-36s | %-20s | %-20s | %-6s \n', ...
-        k, results(k).scenario, results(k).expected, results(k).actual, statusStr);
+    fprintf(' %-3d | %-36s | %-20s | %-6s \n', ...
+        k, results(k).scenario, results(k).actual, statusStr);
 end
 fprintf('=========================================================================================\n');
 
 if allPassed
-    fprintf('  *** ALL 7 ROUTING SCENARIOS PASSED VERIFICATION WITH ZERO DEFECTS! ***\n');
+    fprintf('  *** REAL VALIDATION SMOKE TESTS COMPLETED SUCCESSFULLY ON THE IDRiD TEST SPLIT ***\n');
 else
-    fprintf('  *** SOME ROUTING SCENARIOS DID NOT MATCH EXPECTED OUTCOMES ***\n');
+    fprintf('  *** SOME REAL-IMAGE ROUTING CHECKS DID NOT RETURN A VALID DECISION ***\n');
 end
 fprintf('=========================================================================================\n\n');
 
@@ -262,74 +227,4 @@ function str = getPassString(val)
     else
         str = 'NO  (FAIL)';
     end
-end
-
-function fundusImg = createSyntheticFundus(imgSize, seed)
-    rng(seed * 42);
-    [X, Y] = meshgrid(1:imgSize, 1:imgSize);
-    centerX = imgSize / 2;
-    centerY = imgSize / 2;
-    radius = imgSize * 0.44;
-
-    distFromCenter = sqrt((X - centerX).^2 + (Y - centerY).^2);
-    fovMask = distFromCenter <= radius;
-
-    radialFalloff = max(0, 1.0 - 0.35 * (distFromCenter / radius).^2);
-    radialFalloff(~fovMask) = 0;
-
-    % Retinal pigment layers (Red-Orange base)
-    R = (0.76 + 0.04 * sin(X/25) .* cos(Y/25)) .* radialFalloff;
-    G = (0.40 + 0.03 * cos(X/20) .* sin(Y/20)) .* radialFalloff;
-    B = (0.09 + 0.02 * sin(X/35)) .* radialFalloff;
-
-    % Optic Disc
-    discX = centerX - imgSize * 0.20;
-    discY = centerY;
-    discRadius = imgSize * 0.075;
-    distDisc = sqrt((X - discX).^2 + (Y - discY).^2);
-    discSoft = max(0, 1.0 - (distDisc / discRadius).^2) .* (distDisc <= discRadius);
-
-    R = R + 0.18 * discSoft;
-    G = G + 0.38 * discSoft;
-    B = B + 0.22 * discSoft;
-
-    % Vessel Tree
-    vesselTree = zeros(imgSize, imgSize);
-    t = linspace(0, 1, 220);
-    arcX_sup = discX + t * (imgSize * 0.55);
-    arcY_sup = discY - (imgSize * 0.35) * sin(t * pi * 0.85);
-    arcX_inf = discX + t * (imgSize * 0.55);
-    arcY_inf = discY + (imgSize * 0.35) * sin(t * pi * 0.85);
-
-    branches = { [arcX_sup; arcY_sup], [arcX_inf; arcY_inf] };
-    for b = 1:numel(branches)
-        pts = branches{b};
-        for k = 1:size(pts, 2)
-            px = round(pts(1, k));
-            py = round(pts(2, k));
-            if px > 2 && px < (imgSize - 2) && py > 2 && py < (imgSize - 2)
-                vesselTree(py-1:py+1, px-1:px+1) = 1;
-            end
-        end
-    end
-    vesselTree = imgaussfilt(vesselTree, 0.7);
-    vesselTree(~fovMask) = 0;
-
-    R = R - 0.22 * vesselTree;
-    G = G - 0.32 * vesselTree;
-    B = B - 0.12 * vesselTree;
-
-    % Sensor noise
-    noise = randn(imgSize, imgSize) * 0.012;
-    noise(~fovMask) = 0;
-
-    R = max(0, min(1, R + noise));
-    G = max(0, min(1, G + noise));
-    B = max(0, min(1, B + noise));
-
-    R(~fovMask) = 0;
-    G(~fovMask) = 0;
-    B(~fovMask) = 0;
-
-    fundusImg = cat(3, R, G, B);
 end

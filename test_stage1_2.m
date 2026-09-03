@@ -34,45 +34,38 @@ cfg = config();
 % e.g., customImagePath = 'my_fundus_photo.jpg';
 customImagePath = '';
 
-%% 2. Generate or Load Test Dataset
+%% 2. Load real validation images or a custom real image
 if ~isempty(customImagePath) && exist(customImagePath, 'file')
     fprintf('[INFO] Loading custom fundus image from: %s\n\n', customImagePath);
     rawImg = imread(customImagePath);
-    testCases(1).name = 'Custom Image';
+    testCases(1).name = 'Custom Real Image';
     testCases(1).image = rawImg;
     testCases(1).expectedPass = true;
 else
-    fprintf('[INFO] Generating synthetic fundus dataset for validation...\n');
-    
-    % Generate baseline high-quality fundus image
-    goodFundus = createSyntheticFundus(512);
+    realImageDir = fullfile('data', 'idrid', 'grading', 'test', 'images');
+    imageFiles = [];
+    if exist(realImageDir, 'dir')
+        pngFiles = dir(fullfile(realImageDir, '*.png'));
+        jpgFiles = dir(fullfile(realImageDir, '*.jpg'));
+        jpegFiles = dir(fullfile(realImageDir, '*.jpeg'));
+        imageFiles = [pngFiles; jpgFiles; jpegFiles];
+    end
 
-    % Case 1: Good Quality Fundus (Passes all checks)
-    testCases(1).name = 'Case 1: High Quality (Normal)';
-    testCases(1).image = goodFundus;
-    testCases(1).expectedPass = true;
+    if isempty(imageFiles)
+        error('[ERROR] No real validation images were found in %s. Provide a customImagePath or add the real IDRiD validation images.', realImageDir);
+    end
 
-    % Case 2: Blurry Fundus (Simulated motion / optical defocus)
-    hBlur = fspecial('gaussian', [21 21], 5.0);
-    blurryFundus = imfilter(goodFundus, hBlur, 'replicate');
-    testCases(2).name = 'Case 2: Blurry / Defocused';
-    testCases(2).image = blurryFundus;
-    testCases(2).expectedPass = false;
+    fprintf('[INFO] Loading real fundus images from: %s\n\n', realImageDir);
+    numCases = min(4, numel(imageFiles));
+    for i = 1:numCases
+        imgPath = fullfile(realImageDir, imageFiles(i).name);
+        rawImg = imread(imgPath);
+        testCases(i).name = sprintf('Real Validation Image %d: %s', i, imageFiles(i).name);
+        testCases(i).image = rawImg;
+        testCases(i).expectedPass = true;
+    end
 
-    % Case 3: Underexposed / Dark Fundus (Simulated low-light failure)
-    darkFundus = goodFundus * 0.18; % Severely dark
-    testCases(3).name = 'Case 3: Underexposed (Too Dark)';
-    testCases(3).image = darkFundus;
-    testCases(3).expectedPass = false;
-
-    % Case 4: Incomplete / Severely Cropped Field of View
-    croppedFundus = goodFundus;
-    croppedFundus(:, 1:round(size(goodFundus,2)*0.65), :) = 0; % Crop off 65% of retina
-    testCases(4).name = 'Case 4: Cropped / Bad FOV';
-    testCases(4).image = croppedFundus;
-    testCases(4).expectedPass = false;
-    
-    fprintf('       Generated 4 test cases (Good, Blurry, Dark, Cropped FOV).\n\n');
+    fprintf('       Loaded %d real IDRiD validation images for quality and preprocessing checks.\n\n', numCases);
 end
 
 %% 3. Execute Stage 1: Quality Gate Evaluation
@@ -230,114 +223,6 @@ fprintf('==================================================================\n');
 fprintf('   TEST COMPLETE: All Stage 1 & Stage 2 functions validated!      \n');
 fprintf('==================================================================\n\n');
 
-
-%% ========================================================================
-%  HELPER FUNCTION: Realistic Synthetic Fundus Image Generator
-%  ========================================================================
-function fundusImg = createSyntheticFundus(imgSize)
-    % Generates a realistic fundus photograph with circular mask,
-    % natural orange/red retinal background, optic disc, fovea,
-    % branching vascular tree, and fine microvasculature.
-    
-    if nargin < 1, imgSize = 512; end
-    
-    [X, Y] = meshgrid(1:imgSize, 1:imgSize);
-    centerX = imgSize / 2;
-    centerY = imgSize / 2;
-    radius  = imgSize * 0.44;
-    
-    % 1. Circular Field-of-View Mask
-    distFromCenter = sqrt((X - centerX).^2 + (Y - centerY).^2);
-    fovMask = distFromCenter <= radius;
-    
-    % 2. Retinal background color with natural radial illumination gradient
-    % Retina center is slightly brighter; edges naturally darken (vignetting)
-    radialFalloff = 1.0 - 0.35 * (distFromCenter / radius).^2;
-    radialFalloff(~fovMask) = 0;
-    
-    % Retinal pigment layers (Red-Orange base)
-    R_base = (0.80 + 0.05 * sin(X/30) .* cos(Y/30)) .* radialFalloff;
-    G_base = (0.42 + 0.03 * cos(X/25) .* sin(Y/25)) .* radialFalloff;
-    B_base = (0.10 + 0.02 * sin(X/40)) .* radialFalloff;
-    
-    % 3. Optic Disc (Nasal side: yellowish-orange circular structure)
-    discX = centerX - imgSize * 0.20;
-    discY = centerY;
-    discRadius = imgSize * 0.075;
-    distDisc = sqrt((X - discX).^2 + (Y - discY).^2);
-    discMask = distDisc <= discRadius;
-    discSoft = max(0, 1.0 - (distDisc / discRadius).^2) .* discMask;
-    
-    R_base = R_base + 0.18 * discSoft;
-    G_base = G_base + 0.40 * discSoft;
-    B_base = B_base + 0.25 * discSoft;
-    
-    % 4. Fovea & Macula (Temporal side: darker avascular region)
-    foveaX = centerX + imgSize * 0.14;
-    foveaY = centerY;
-    foveaRadius = imgSize * 0.08;
-    distFovea = sqrt((X - foveaX).^2 + (Y - foveaY).^2);
-    foveaSoft = max(0, 1.0 - (distFovea / foveaRadius).^2) .* (distFovea <= foveaRadius);
-    
-    R_base = R_base - 0.15 * foveaSoft;
-    G_base = G_base - 0.12 * foveaSoft;
-    
-    % 5. Retinal Blood Vessels (Superior/Inferior arcades branching from disc)
-    vesselTree = zeros(imgSize, imgSize);
-    
-    % Main Superior Arcade
-    t = linspace(0, 1, 300);
-    arcX_sup = discX + t * (imgSize * 0.55);
-    arcY_sup = discY - (imgSize * 0.35) * sin(t * pi * 0.85);
-    
-    % Main Inferior Arcade
-    arcX_inf = discX + t * (imgSize * 0.55);
-    arcY_inf = discY + (imgSize * 0.35) * sin(t * pi * 0.85);
-    
-    % Nasal vessels
-    arcX_nas_sup = discX - t * (imgSize * 0.20);
-    arcY_nas_sup = discY - (imgSize * 0.25) * sin(t * pi * 0.7);
-    arcX_nas_inf = discX - t * (imgSize * 0.20);
-    arcY_nas_inf = discY + (imgSize * 0.25) * sin(t * pi * 0.7);
-    
-    % Draw vessel branches with decreasing thickness
-    branches = { [arcX_sup; arcY_sup], [arcX_inf; arcY_inf], ...
-                 [arcX_nas_sup; arcY_nas_sup], [arcX_nas_inf; arcY_nas_inf] };
-             
-    for b = 1:numel(branches)
-        pts = branches{b};
-        for k = 1:size(pts, 2)
-            px = round(pts(1, k));
-            py = round(pts(2, k));
-            thickness = max(1, round(4.5 * (1.0 - (k / size(pts, 2)) * 0.6)));
-            if px > thickness && px < (imgSize - thickness) && py > thickness && py < (imgSize - thickness)
-                [bx, by] = meshgrid(-thickness:thickness, -thickness:thickness);
-                circ = (bx.^2 + by.^2) <= thickness^2;
-                vesselTree(py-thickness:py+thickness, px-thickness:px+thickness) = ...
-                    max(vesselTree(py-thickness:py+thickness, px-thickness:px+thickness), circ);
-            end
-        end
-    end
-    
-    % Add secondary microvessel branches
-    for angle = [-0.4, -0.2, 0.2, 0.4, 0.8, -0.8]
-        t2 = linspace(0.2, 0.8, 120);
-        brX = (discX + imgSize*0.25) + t2 * (imgSize * 0.25) * cos(angle);
-        brY = centerY + (imgSize * 0.30) * sin(angle) + t2 * (imgSize * 0.15) * sin(angle*2);
-        for k = 1:numel(t2)
-            px = round(brX(k));
-            py = round(brY(k));
-            if px > 2 && px < (imgSize - 2) && py > 2 && py < (imgSize - 2)
-                vesselTree(py-1:py+1, px-1:px+1) = 1;
-            end
-        end
-    end
-    
-    % Smooth vessel tree slightly
-    vesselTree = imgaussfilt(vesselTree, 0.8);
-    vesselTree(~fovMask) = 0;
-    
-    % Hemoglobin absorption: Vessels strongly absorb Green & Blue light
     R_base = R_base - 0.25 * vesselTree;
     G_base = G_base - 0.35 * vesselTree;
     B_base = B_base - 0.15 * vesselTree;

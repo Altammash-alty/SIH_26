@@ -7,10 +7,26 @@ function results = simulateClinicThroughput(numPatients, cfg)
 %   Retinopathy screening clinic against a traditional manual ophthalmologist
 %   screening workflow.
 %
+%   DATA PROVENANCE (important for honest reporting):
+%       MEASURED values — derived from running the pipeline on real IDRiD data:
+%           cfg.sim.retakeProbability        (from test_real_data_pipeline.m)
+%           cfg.sim.aiProcessingTimeSeconds  (from test_real_data_pipeline.m)
+%
+%       ASSUMED values — NOT validated on a real clinic workflow:
+%           cfg.sim.doctorReviewTimeGrade0Minutes  (literature / expert estimate)
+%           cfg.sim.doctorReviewTimeGrade1Minutes  (literature / expert estimate)
+%           cfg.sim.doctorReviewTimeGrade24Minutes (literature / expert estimate)
+%           cfg.sim.costManualScreeningUSD         (published tele-screening costs)
+%           cfg.sim.costAiAssistedScreeningUSD     (internal infrastructure estimate)
+%           gradeProbDist                          (Yau et al. 2012 global prevalence)
+%
+%   Therefore, throughput multiplier, cost savings, and workload reduction figures
+%   are SIMULATED (unvalidated parameters). Only retake rate and latency are measured.
+%
 %   Simulation Stages:
 %       1. Patient Arrivals (Poisson inter-arrival times)
 %       2. Technician Camera Acquisition
-%       3. Stage 1 Quality Gate Check & Retake Loop (rejection handling)
+%       3. Stage 1 Quality Gate Check & Retake Loop (MEASURED rejection rate)
 %       4. Stages 2-4 AI Preprocessing, Segmentation & Severity Grading
 %       5. AI-Assisted Triage Routing (Normal fast-track vs High-Risk urgent queue)
 %       6. Doctor Review & Sign-off
@@ -18,18 +34,12 @@ function results = simulateClinicThroughput(numPatients, cfg)
 %   Inputs:
 %       numPatients - (Optional) Number of patients to simulate. Defaults to 120.
 %       cfg         - (Optional) Configuration struct. Defaults to config().
+%                     If cfg.sim.retakeProbability and cfg.sim.aiProcessingTimeSeconds
+%                     have been overridden with MEASURED values from test_real_data_pipeline.m,
+%                     those measured values will flow directly into the simulation.
 %
 %   Outputs:
-%       results     - Struct containing operational metrics:
-%                       .totalPatientsSimulated
-%                       .aiThroughputPatientsPerHour
-%                       .manualThroughputPatientsPerHour
-%                       .throughputMultiplier (e.g. 4.2x speedup)
-%                       .aiAvgWaitTimeMinutes
-%                       .manualAvgWaitTimeMinutes
-%                       .doctorTimeSavedPercent
-%                       .totalDailyCostSavingsUSD
-%                       .patientLog (table of individual patient timestamps & stages)
+%       results     - Struct containing operational metrics plus provenance flags.
 %
 %   Author: DR Screening Pipeline MVP
 %   Date: 2026-08-30
@@ -178,22 +188,37 @@ function results = simulateClinicThroughput(numPatients, cfg)
     costAiTotal     = numPatients * cfg.sim.costAiAssistedScreeningUSD;
     dailyCostSavings = costManualTotal - costAiTotal;
 
-    % 6. Construct Results Struct
+    % 6. Construct Results Struct with data provenance labels
     results = struct();
     results.totalPatientsSimulated = numPatients;
+
+    % SIMULATED (unvalidated parameters) — throughput & economics
     results.aiThroughputPatientsPerHour = aiThroughputPerHour;
     results.manualThroughputPatientsPerHour = manualThroughputPerHour;
-    results.throughputMultiplier = throughputMultiplier;
-    results.aiAvgWaitTimeMinutes = aiAvgWaitTime;
-    results.manualAvgWaitTimeMinutes = manualAvgWaitTime;
-    results.aiTotalDoctorHours = aiTotalDocTimeHours;
-    results.manualTotalDoctorHours = manualTotalDocTimeHours;
-    results.doctorTimeSavedPercent = docTimeSavedPercent;
+    results.throughputMultiplier = throughputMultiplier;         % SIMULATED (unvalidated parameters)
+    results.aiAvgWaitTimeMinutes = aiAvgWaitTime;               % SIMULATED (unvalidated parameters)
+    results.manualAvgWaitTimeMinutes = manualAvgWaitTime;       % SIMULATED (unvalidated parameters)
+    results.aiTotalDoctorHours = aiTotalDocTimeHours;           % SIMULATED (unvalidated parameters)
+    results.manualTotalDoctorHours = manualTotalDocTimeHours;   % SIMULATED (unvalidated parameters)
+    results.doctorTimeSavedPercent = docTimeSavedPercent;       % SIMULATED (unvalidated parameters)
+    results.totalDailyCostSavingsUSD = dailyCostSavings;        % SIMULATED (unvalidated parameters)
+
+    % Retake rate — MEASURED if cfg was supplied from test_real_data_pipeline.m
     results.retakeCount = sum(retakeFlags);
     results.retakeRatePercent = (sum(retakeFlags) / numPatients) * 100.0;
-    results.totalDailyCostSavingsUSD = dailyCostSavings;
-    
-    % Detail summary log
+    results.retakeProbabilityUsed = retakeProb;                 % Trace whether MEASURED or default
+
+    % AI latency — MEASURED if cfg was supplied from test_real_data_pipeline.m
+    results.aiProcessingTimeMsUsed = cfg.sim.aiProcessingTimeSeconds * 1000;
+
+    % Data provenance flags
+    results.provenance.throughputMultiplier  = 'SIMULATED (unvalidated parameters: assumed doctor review times)';
+    results.provenance.doctorTimeSaved       = 'SIMULATED (unvalidated parameters: assumed doctor review times)';
+    results.provenance.costSavings           = 'SIMULATED (unvalidated parameters: assumed cost structure)';
+    results.provenance.retakeRate            = sprintf('Driven by cfg.sim.retakeProbability = %.4f', retakeProb);
+    results.provenance.aiLatency             = sprintf('Driven by cfg.sim.aiProcessingTimeSeconds = %.4f s', cfg.sim.aiProcessingTimeSeconds);
+
+    % Detail logs
     results.patientArrivalTimes = patientArrivalTimes;
     results.aiTotalWaitTimes = totalWaitTimes;
     results.manualTotalWaitTimes = totalWaitTimesManual;

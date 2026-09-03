@@ -77,8 +77,8 @@ function [isTypical, distributionScore, flagReason, details] = checkDistribution
                 refStats = loaded;
             end
         else
-            % Fallback: Build synthetic reference stats if file is missing
-            refStats = ood.buildReferenceStats([], statsPath, cfg);
+            error('checkDistribution:MissingReferenceStats', ...
+                'No reference statistics file found at "%s". Build it from the real training set with ood.buildReferenceStats(''data/idrid/grading/train/images'', ...).', statsPath);
         end
     elseif ischar(refStats) || isstring(refStats)
         % Path provided as string

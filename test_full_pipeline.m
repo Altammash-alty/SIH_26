@@ -29,80 +29,41 @@ if ~exist(reportDir, 'dir')
     mkdir(reportDir);
 end
 
-%% 2. Generate Synthetic Multi-Stage Test Dataset
-fprintf('[1/3] Generating synthetic clinical cases (Grades 0-4 + Quality Failures)...\n\n');
+%% 2. Load a real validation dataset that is separate from training
+fprintf('[1/3] Loading real validation data from the held-out split (not used in training)...\n\n');
+
+validationRoot = fullfile(pwd, 'data', 'idrid', 'grading');
+if isfield(cfg, 'validation') && isfield(cfg.validation, 'rootDir') && ~isempty(cfg.validation.rootDir)
+    validationRoot = cfg.validation.rootDir;
+end
+
+if ~exist(validationRoot, 'dir')
+    error('test_full_pipeline:ValidationDirNotFound', ...
+        'No validation dataset found at "%s". Point cfg.validation.rootDir to a separate real dataset that is not used in training.', validationRoot);
+end
+
+try
+    [validationTbl, ~] = data.loadIDRiDGrading('test', validationRoot);
+catch ME
+    fprintf('[ERROR] Could not load validation dataset.\n');
+    fprintf('  Message: %s\n', ME.message);
+    fprintf('  Supply a separate real validation folder outside the training split.\n');
+    return;
+end
+
+nVal = min(height(validationTbl), 8);
+fprintf('  -> Loaded %d real validation images from %s\n', nVal, validationRoot);
 
 testCases = struct();
 
-% Case 1: Grade 0 - Normal Healthy Retina
-testCases(1).name = 'Case 1: Normal Retina (Grade 0)';
-testCases(1).image = createSyntheticFundusCase(512, 0);
-testCases(1).expectedPass = true;
-testCases(1).expectedGrade = 0;
-testCases(1).patientID = 'PAT-2026-001';
-testCases(1).eye = 'OD (Right Eye)';
-
-% Case 2: Grade 1 - Mild NPDR (Microaneurysms only)
-testCases(2).name = 'Case 2: Mild NPDR (Grade 1 - MAs)';
-testCases(2).image = createSyntheticFundusCase(512, 1);
-testCases(2).expectedPass = true;
-testCases(2).expectedGrade = 1;
-testCases(2).patientID = 'PAT-2026-002';
-testCases(2).eye = 'OS (Left Eye)';
-
-% Case 3: Grade 2 - Moderate NPDR (Hemorrhages & Exudates)
-testCases(3).name = 'Case 3: Moderate NPDR (Grade 2 - Hemo + Exudates)';
-testCases(3).image = createSyntheticFundusCase(512, 2);
-testCases(3).expectedPass = true;
-testCases(3).expectedGrade = 2;
-testCases(3).patientID = 'PAT-2026-003';
-testCases(3).eye = 'OD (Right Eye)';
-
-% Case 4: Grade 3 - Severe NPDR (4-Quadrant Hemorrhages)
-testCases(4).name = 'Case 4: Severe NPDR (Grade 3 - 4-2-1 Rule)';
-testCases(4).image = createSyntheticFundusCase(512, 3);
-testCases(4).expectedPass = true;
-testCases(4).expectedGrade = 3;
-testCases(4).patientID = 'PAT-2026-004';
-testCases(4).eye = 'OS (Left Eye)';
-
-% Case 5: Grade 4 - Proliferative DR (Neovascularization)
-testCases(5).name = 'Case 5: Proliferative DR (Grade 4 - PDR)';
-testCases(5).image = createSyntheticFundusCase(512, 4);
-testCases(5).expectedPass = true;
-testCases(5).expectedGrade = 4;
-testCases(5).patientID = 'PAT-2026-005';
-testCases(5).eye = 'OD (Right Eye)';
-
-% Case 6: Quality Gate Failure - Severe Optical Blur
-baseImg = testCases(1).image;
-hBlur = fspecial('gaussian', [25 25], 6.0);
-blurryImg = imfilter(baseImg, hBlur, 'replicate');
-testCases(6).name = 'Case 6: Quality Failure (Severe Blur)';
-testCases(6).image = blurryImg;
-testCases(6).expectedPass = false;
-testCases(6).expectedGrade = -1;
-testCases(6).patientID = 'PAT-2026-006';
-testCases(6).eye = 'OD (Right Eye)';
-
-% Case 7: Quality Gate Failure - Underexposed / Dark
-darkImg = baseImg * 0.15;
-testCases(7).name = 'Case 7: Quality Failure (Underexposed Dark)';
-testCases(7).image = darkImg;
-testCases(7).expectedPass = false;
-testCases(7).expectedGrade = -1;
-testCases(7).patientID = 'PAT-2026-007';
-testCases(7).eye = 'OS (Left Eye)';
-
-% Case 8: Quality Gate Failure - Severely Cropped FOV
-croppedImg = baseImg;
-croppedImg(:, 1:round(size(baseImg, 2) * 0.60), :) = 0;
-testCases(8).name = 'Case 8: Quality Failure (Incomplete FOV)';
-testCases(8).image = croppedImg;
-testCases(8).expectedPass = false;
-testCases(8).expectedGrade = -1;
-testCases(8).patientID = 'PAT-2026-008';
-testCases(8).eye = 'OS (Left Eye)';
+for i = 1:nVal
+    testCases(i).name = sprintf('Validation case %d: %s', i, validationTbl.ImageName{i});
+    testCases(i).image = imread(validationTbl.ImagePath{i});
+    testCases(i).expectedPass = true;
+    testCases(i).expectedGrade = validationTbl.DRGrade(i);
+    testCases(i).patientID = sprintf('VAL-%03d', i);
+    testCases(i).eye = 'Validation Set';
+end
 
 %% 3. Execute End-to-End Pipeline Evaluation
 fprintf('[2/3] Executing 5-Stage Autonomous Pipeline on all cases...\n\n');
@@ -161,63 +122,6 @@ fprintf('=======================================================================
 fprintf('               FULL VERIFICATION COMPLETE - ALL 5 STAGES OPERATIONAL!                   \n');
 fprintf(' Reports and Figures saved to: %s\n', reportDir);
 fprintf('========================================================================================\n');
-
-
-%% ========================================================================
-%  HELPER FUNCTION: Synthetic Retinal Fundus Generator with DR Lesions
-%  ========================================================================
-function img = createSyntheticFundusCase(N, grade)
-    % Generates a realistic synthetic fundus photograph with anatomical landmarks
-    % and pathological lesions calibrated to the target DR grade:
-    %   grade = 0: Clean normal retina
-    %   grade = 1: 3-4 microaneurysms
-    %   grade = 2: 12 hemorrhages + hard exudate clusters
-    %   grade = 3: 4-quadrant severe blot hemorrhages (25 per quadrant) + venous beading
-    %   grade = 4: Neovascularization vascular fronds + massive hemorrhage
-
-    [X, Y] = meshgrid(1:N, 1:N);
-    cx = N / 2;
-    cy = N / 2;
-    radius = N * 0.44;
-
-    % 1. Retinal Aperture Foreground Mask
-    distFromCenter = sqrt((X - cx).^2 + (Y - cy).^2);
-    fundusMask = distFromCenter <= radius;
-
-    % 2. Retinal Pigment Epithelium (RPE) Gradient
-    rpeRed   = 0.78 - 0.22 * (distFromCenter / radius);
-    rpeGreen = 0.38 - 0.16 * (distFromCenter / radius);
-    rpeBlue  = 0.10 - 0.06 * (distFromCenter / radius);
-
-    % Subtle texture noise
-    rng(100 + grade);
-    tex = imgaussfilt(randn(N, N) * 0.02, 2.0);
-    rpeRed   = rpeRed + tex;
-    rpeGreen = rpeGreen + tex * 0.5;
-    rpeBlue  = rpeBlue + tex * 0.2;
-
-    % 3. Optic Disc (Nasal side: X ~ 0.32*N, Y ~ 0.50*N)
-    odX = round(N * 0.32);
-    odY = round(N * 0.50);
-    odR = round(N * 0.08);
-    distOD = sqrt((X - odX).^2 + (Y - odY).^2);
-    odMask = distOD <= odR;
-    
-    % Bright yellowish optic disc
-    rpeRed(odMask)   = 0.95;
-    rpeGreen(odMask) = 0.85;
-    rpeBlue(odMask)  = 0.45;
-
-    % Physiological Optic Cup
-    cupR = round(odR * 0.35);
-    cupMask = distOD <= cupR;
-    rpeRed(cupMask)   = 0.99;
-    rpeGreen(cupMask) = 0.96;
-    rpeBlue(cupMask)  = 0.75;
-
-    % 4. Fovea Centralis (Temporal side: X ~ 0.65*N, Y ~ 0.53*N)
-    foveaX = round(N * 0.65);
-    foveaY = round(N * 0.53);
     distFovea = sqrt((X - foveaX).^2 + (Y - foveaY).^2);
     foveaDepression = exp(-(distFovea.^2) / (2 * (N * 0.06)^2));
     
