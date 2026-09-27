@@ -91,7 +91,7 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
     bothatGreen = bothatGreen .* erodedMask;
 
     % Exclude main vascular tree (dilate vessel mask slightly to avoid vessel edge fringes)
-    dilatedVessels = imdilate(vesselMask, strel('disk', 2));
+    dilatedVessels = imdilate(vesselMask, strel('disk', 1));
     nonVesselMask = erodedMask & ~dilatedVessels & ~odMask;
 
     % Threshold bottom-hat response
@@ -103,6 +103,9 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
     maxDarkArea = cfg.segment.lesion.darkMaxSize;
     
     cleanDark = bwareaopen(rawDarkCand, minDarkArea);
+    if isfield(cfg, 'debug') && cfg.debug
+        fprintf('[segmentLesions] dark raw=%d afterArea=%d\n', nnz(rawDarkCand), nnz(cleanDark));
+    end
     darkCC = bwconncomp(cleanDark);
     darkLesionMask = false(rows, cols);
     darkStatsList = [];
@@ -122,6 +125,9 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
         darkCount = numel(validDarkIdx);
     else
         darkCount = 0;
+    end
+    if isfield(cfg, 'debug') && cfg.debug
+        fprintf('[segmentLesions] dark afterShape=%d\n', darkCount);
     end
 
     % ---------------------------------------------------------------------

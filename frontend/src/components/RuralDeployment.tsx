@@ -1,77 +1,131 @@
-const nodes = ['Patient', 'PHC', 'AI Screening', 'Explainable Report', 'Ophthalmologist', 'Referral'];
-const photoStory = [
-  {
-    label: 'Community screening queue',
-    subtitle: 'Village outreach & trust building',
-    image: '/ChatGPT%20Image%20Sep%203,%202026,%2006_26_57%20PM.png',
-  },
-  {
-    label: 'A primary health centre',
-    subtitle: 'Local care infrastructure',
-    image: '/ChatGPT%20Image%20Sep%203,%202026,%2006_20_02%20PM.png',
-  },
-  {
-    label: 'Portable eye screening',
-    subtitle: 'Field exam with AI-supported review',
-    image: '/ChatGPT%20Image%20Sep%203,%202026,%2006_25_56%20PM.png',
-  },
-  {
-    label: 'Clinician review and referral',
-    subtitle: 'Tele-ophthalmology follow-up',
-    image: '/Gemini_Generated_Image_6qw7uu6qw7uu6qw7.png',
-  },
+import React from 'react';
+
+const NODES = [
+  { step: '01', label: 'Capture', sub: 'Non-mydriatic camera' },
+  { step: '02', label: 'Queue', sub: 'Local buffer & sync' },
+  { step: '03', label: 'Inference', sub: 'Autonomous pipeline' },
+  { step: '04', label: 'Review', sub: 'Specialist tele-triage' },
 ];
 
-export function RuralDeployment() {
+export const RuralDeployment: React.FC = () => {
   return (
-    <section style={{ padding: 'var(--space-24) 0', background: 'var(--bg-primary)' }}>
-      <div className="container">
-        <div style={{ marginBottom: 'var(--space-10)' }}>
-          <div className="eyebrow eyebrow-blue" style={{ marginBottom: 'var(--space-3)' }}>Rural deployment</div>
-          <h2>Designed for the realities of rural healthcare.</h2>
+    <section id="deployment" style={{ backgroundColor: 'var(--canvas)', padding: '80px 0', borderTop: '1px solid var(--hairline)' }}>
+      <div className="section-container">
+        {/* Header */}
+        <div style={{ marginBottom: '48px', maxWidth: '640px' }}>
+          <div className="caption" style={{ marginBottom: '12px' }}>
+            Capacity Model
+          </div>
+          <h2 className="heading-lg" style={{ marginBottom: '16px' }}>
+            District-level throughput, not a lab number.
+          </h2>
+          <p className="body-lg">
+            A discrete-event Monte Carlo simulation models a clinic day: image acquisition, processing queue, AI inference, and doctor review, under realistic patient load. Outputs include throughput rate, average wait time, and estimated cost per screening versus unassisted manual review.
+          </p>
         </div>
 
-        <div className="card" style={{ padding: 'var(--space-6)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: 'var(--space-3)', alignItems: 'center' }}>
-            {nodes.map((node, index) => (
-              <div key={node} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                <div style={{
-                  flex: 1,
-                  minHeight: '72px',
+        {/* Four-Node Flow Diagram Card */}
+        <div
+          className="clinical-card"
+          style={{ padding: '32px', marginBottom: '32px' }}
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: '16px',
+              position: 'relative',
+            }}
+          >
+            {NODES.map((node) => (
+              <div
+                key={node.step}
+                style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: 'var(--space-3)',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-default)',
-                  background: index === 2 ? 'var(--accent-blue-light)' : 'var(--bg-subtle)',
-                  color: 'var(--text-primary)',
-                  fontSize: 'var(--text-sm)',
-                  fontWeight: 600,
-                  textAlign: 'center',
-                }}>
-                  {node}
+                  flexDirection: 'column',
+                  gap: '8px',
+                  backgroundColor: node.label === 'Inference' ? 'rgba(15, 118, 110, 0.05)' : 'var(--surface-alt)',
+                  border: node.label === 'Inference' ? '1.5px solid var(--teal)' : '1px solid var(--hairline)',
+                  borderRadius: 'var(--radius-nested)',
+                  padding: '20px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--mid-gray)' }}>
+                    PHASE {node.step}
+                  </span>
+                  {node.label === 'Inference' && (
+                    <span
+                      style={{
+                        width: '8px',
+                        height: '8px',
+                        borderRadius: '50%',
+                        backgroundColor: 'var(--teal)',
+                        display: 'inline-block',
+                      }}
+                    />
+                  )}
                 </div>
-                {index < nodes.length - 1 && (
-                  <div style={{ fontSize: '1.2rem', color: 'var(--text-tertiary)' }}>→</div>
-                )}
+                <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--ink)' }}>
+                  {node.label}
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--mid-gray)' }}>
+                  {node.sub}
+                </div>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="photo-grid" style={{ marginTop: 'var(--space-8)' }}>
-          {photoStory.map((story) => (
-            <div key={story.label} className="photo-tile card-hover" style={{ backgroundImage: `url(${story.image})` }}>
-              <div className="photo-tile-overlay" />
-              <div className="photo-tile-content">
-                <div className="eyebrow" style={{ color: '#E2E8F0', marginBottom: 'var(--space-2)' }}>{story.label}</div>
-                <div style={{ fontSize: 'var(--text-sm)', color: '#E2E8F0', opacity: 0.9 }}>{story.subtitle}</div>
-              </div>
+        {/* Simulation Output Metrics Grid */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: '16px',
+          }}
+        >
+          <div className="clinical-card" style={{ padding: '20px' }}>
+            <div className="caption" style={{ marginBottom: '6px' }}>AI throughput</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
+              13.4 <span style={{ fontSize: '14px', fontWeight: 400, color: 'var(--mid-gray)' }}>/ hr</span>
             </div>
-          ))}
+            <div style={{ fontSize: '12px', color: 'var(--mid-gray)' }}>patients per hour</div>
+          </div>
+
+          <div className="clinical-card" style={{ padding: '20px' }}>
+            <div className="caption" style={{ marginBottom: '6px' }}>Manual throughput</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
+              4.9 <span style={{ fontSize: '14px', fontWeight: 400, color: 'var(--mid-gray)' }}>/ hr</span>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--mid-gray)' }}>patients per hour</div>
+          </div>
+
+          <div className="clinical-card" style={{ padding: '20px' }}>
+            <div className="caption" style={{ marginBottom: '6px' }}>Doctor time saved</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--teal)', marginBottom: '4px' }}>
+              85.2%
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--mid-gray)' }}>clinical hours freed</div>
+          </div>
+
+          <div className="clinical-card" style={{ padding: '20px' }}>
+            <div className="caption" style={{ marginBottom: '6px' }}>Average wait time</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
+              9.0 <span style={{ fontSize: '14px', fontWeight: 400, color: 'var(--mid-gray)' }}>mins</span>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--mid-gray)' }}>vs 500.2 min unassisted</div>
+          </div>
+
+          <div className="clinical-card" style={{ padding: '20px' }}>
+            <div className="caption" style={{ marginBottom: '6px' }}>Daily cost saving</div>
+            <div style={{ fontSize: '24px', fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
+              $3,900
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--mid-gray)' }}>USD per 120 patients</div>
+          </div>
         </div>
       </div>
     </section>
   );
-}
+};

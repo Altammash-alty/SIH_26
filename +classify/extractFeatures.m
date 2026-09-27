@@ -94,7 +94,8 @@ function features = extractFeatures(enhancedImg, segmentResults, cfg)
     % Neovascularization Indicator:
     % PDR is marked by fine, disorganized, high-density new capillary fronds (NVD/NVE).
     % We detect elevated capillary density outside primary vascular trunks and optic disc rim.
-    if vesselDensity > 18.0 || (darkAreaRatio > 0.02 && vesselTortuosity > 1.35)
+    hasLesionEvidence = darkAreaRatio > 0.005 || brightAreaRatio > 0.005;
+    if hasLesionEvidence && (vesselDensity > 18.0 || (darkAreaRatio > 0.02 && vesselTortuosity > 1.35))
         neovascularizationRatio = min(1.0, (vesselDensity - 14.0) / 10.0 + darkAreaRatio * 10);
     else
         neovascularizationRatio = min(1.0, darkAreaRatio * 5.0);

@@ -109,28 +109,40 @@ function [heatmap2D, blendedRGB] = generateGradCAM(enhancedImg, segmentResults, 
 
     % 3. Mask and Normalize 2D Heatmap
     heatmapRaw = heatmapRaw .* mask;
+    heatmapRaw(isnan(heatmapRaw) | isinf(heatmapRaw)) = 0;
     validVals = heatmapRaw(mask > 0);
     if ~isempty(validVals) && (max(validVals) > min(validVals))
         heatmap2D = (heatmapRaw - min(validVals)) / (max(validVals) - min(validVals));
     else
         heatmap2D = heatmapRaw;
     end
+    heatmap2D(isnan(heatmap2D) | isinf(heatmap2D)) = 0;
+    heatmap2D = max(0.0, min(1.0, heatmap2D));
 
-    % 4. Convert Heatmap to RGB using Colormap
-    cmapName = cfg.explain.colormap;
-    try
-        cmap = colormap(cmapName);
-    catch
-        % Fallback turbo/jet colormap generator
-        cmap = jet(256);
+    % 4. Convert Heatmap to RGB using Colormap (headless-safe)
+    nColors = 256;
+    cmapName = 'jet';
+    if isfield(cfg, 'explain') && isfield(cfg.explain, 'colormap')
+        cmapName = cfg.explain.colormap;
+    end
+    
+    switch lower(char(cmapName))
+        case 'turbo'
+            cmap = turbo(nColors);
+        case 'hot'
+            cmap = hot(nColors);
+        case 'parula'
+            cmap = parula(nColors);
+        otherwise
+            cmap = jet(nColors);
     end
 
     % Map [0, 1] to colormap indices [1, size(cmap, 1)]
-    cIndices = round(heatmap2D * (size(cmap, 1) - 1)) + 1;
+    cIndices = max(1, min(size(cmap, 1), round(heatmap2D * (size(cmap, 1) - 1)) + 1));
     heatmapRGB = zeros(rows, cols, 3);
     for c = 1:3
         channelMap = cmap(:, c);
-        heatmapRGB(:,:,c) = channelMap(cIndices);
+        heatmapRGB(:,:,c) = reshape(channelMap(cIndices(:)), [rows, cols]);
     end
 
     % 5. Alpha-blend Heatmap over Original/Enhanced Fundus

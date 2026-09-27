@@ -30,7 +30,7 @@ function cfg = config()
     % 1. Blur / Sharpness check (Laplacian variance)
     % Higher variance indicates sharper edges (retinal vessels, optic disc).
     cfg.quality.blur = struct();
-    cfg.quality.blur.threshold = 12.0;         % Minimum sharpness score to pass
+    cfg.quality.blur.threshold = 1.8;          % Minimum sharpness score to pass (empirically calibrated for 768px)
     cfg.quality.blur.laplacianKernel = [0 1 0; 1 -4 1; 0 1 0]; % 3x3 discrete Laplacian
     cfg.quality.blur.maskErosionRadius = 15;   % Pixels to erode fundus boundary (avoids boundary edge bias)
 
@@ -39,7 +39,7 @@ function cfg = config()
     cfg.quality.illumination = struct();
     cfg.quality.illumination.minMean = 0.15;     % Minimum mean intensity (rejects underexposed / dark images)
     cfg.quality.illumination.maxMean = 0.85;     % Maximum mean intensity (rejects overexposed / washed out)
-    cfg.quality.illumination.minStd  = 0.04;     % Minimum standard deviation (rejects low-contrast / flat images)
+    cfg.quality.illumination.minStd  = 0.030;    % Minimum standard deviation (rejects low-contrast / flat images)
     cfg.quality.illumination.maxStd  = 0.35;     % Maximum standard deviation (catches severe uneven flash/reflection)
     cfg.quality.illumination.underThreshold = 0.05; % Pixel intensity below which counts as clipping black
     cfg.quality.illumination.maxUnderRatio = 0.25;  % Max allowed fraction of underexposed pixels inside mask

@@ -1,6 +1,15 @@
 # Environment & Secrets
 *.env
 .env.*
+.venv/
+env/
+
+# Python & Node Build Output
+__pycache__/
+*.py[cod]
+*$py.class
+node_modules/
+dist/
 
 # Datasets & Large Data Files
 dataset/

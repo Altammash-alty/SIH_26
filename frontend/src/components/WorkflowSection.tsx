@@ -1,124 +1,134 @@
-const STEPS = [
+import React from 'react';
+
+const STAGES = [
   {
-    icon: '📷',
-    label: 'Capture',
-    desc: 'Fundus image acquired via portable camera.',
+    step: '01',
+    name: 'Quality Gate',
+    desc: 'Measures focus, illumination uniformity, and field-of-view coverage. Rejects images below threshold.',
+    metric: 'Blur, Illumination & FOV check',
   },
   {
-    icon: '✓',
-    label: 'Quality Check',
-    desc: 'Focus, illumination and FOV assessment.',
+    step: '02',
+    name: 'CLAHE Enhancement',
+    desc: 'Applies contrast-limited adaptive histogram equalization on the green channel. Normalizes illumination.',
+    metric: 'Rayleigh Green-CLAHE + Denoise',
   },
   {
-    icon: '⬛',
-    label: 'Enhancement',
-    desc: 'CLAHE green-channel preprocessing and denoising.',
+    step: '03',
+    name: 'Lesion Detection',
+    desc: 'Identifies dark lesions (microaneurysms, hemorrhages) and bright lesions (hard exudates, cotton-wool spots).',
+    metric: 'Morphological top/bottom-hat filters',
   },
   {
-    icon: '◎',
-    label: 'Detection',
-    desc: 'Identify microaneurysms, hemorrhages and exudates.',
+    step: '04',
+    name: 'DR Grading',
+    desc: 'Classifies severity on the ICDR 0–4 scale using lesion counts and spatial distribution. Returns per-class probabilities.',
+    metric: 'ETDRS 4-2-1 rule table & softmax',
   },
   {
-    icon: '▤',
-    label: 'Grading',
-    desc: 'ICDR DR severity Level 0–4 classification.',
-  },
-  {
-    icon: '⊛',
-    label: 'Explanation',
-    desc: 'Grad-CAM and lesion-level evidence.',
-  },
-  {
-    icon: '✦',
-    label: 'Review',
-    desc: 'Clinician validates or overrides the AI result.',
+    step: '05',
+    name: 'Explainability',
+    desc: 'Generates a Grad-CAM saliency map. Lists lesion evidence with confidence scores. Routes result to clinician or auto-clear queue.',
+    metric: 'Grad-CAM overlay & Mahalanobis OOD',
   },
 ];
 
-export function WorkflowSection() {
+export const WorkflowSection: React.FC = () => {
   return (
-    <section id="clinical-workflow" className="section" style={{ background: 'linear-gradient(180deg, rgba(7, 24, 39, 0.8), rgba(10, 21, 35, 0.96))', paddingTop: '72px', paddingBottom: '72px' }}>
-      <div className="container">
-        <div style={{ textAlign: 'center', marginBottom: 'var(--space-10)' }}>
-          <h2 style={{ marginBottom: 'var(--space-3)' }}>
-            From retinal image to explainable clinical evidence.
+    <section id="pipeline" style={{ backgroundColor: 'var(--canvas)', padding: '80px 0' }}>
+      <div className="section-container">
+        {/* Header */}
+        <div style={{ marginBottom: '48px', maxWidth: '640px' }}>
+          <div className="caption" style={{ marginBottom: '12px' }}>
+            5-Stage Pipeline
+          </div>
+          <h2 className="heading-lg" style={{ marginBottom: '16px' }}>
+            From retinal photograph to clinical evidence.
           </h2>
-          <p style={{ fontSize: 'var(--text-base)', maxWidth: '480px', margin: '0 auto', color: 'var(--text-secondary)' }}>
-            A seven-stage automated pipeline with a human review gate at the end.
+          <p className="body-lg">
+            Each stage runs in sequence. A quality gate at Stage 1 stops processing if the image is too degraded to yield a reliable result. A human clinician remains in the loop at Stage 5.
           </p>
         </div>
 
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
-          gap: 0,
-          alignItems: 'stretch',
-          background: 'rgba(12, 26, 39, 0.9)',
-          border: '1px solid var(--border-default)',
-          borderRadius: 'var(--radius-xl)',
-          overflow: 'hidden',
-          boxShadow: '0 18px 40px rgba(2, 6, 23, 0.18)',
-        }}>
-          {STEPS.map((step, i) => (
-            <div key={step.label} className="stage-card" style={{
-              padding: 'var(--space-5) var(--space-4)',
-              borderRight: i < STEPS.length - 1 ? '1px solid var(--border-default)' : 'none',
-              textAlign: 'center',
-              position: 'relative',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'flex-start',
-              alignItems: 'center',
-              minHeight: '170px',
-              animationDelay: `${i * 80}ms`,
-            }}>
-              {/* Step number */}
-              <div style={{
-                fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-tertiary)',
-                marginBottom: 'var(--space-3)', fontVariantNumeric: 'tabular-nums',
-              }}>
-                {String(i + 1).padStart(2, '0')}
-              </div>
-              {/* Icon */}
-              <div style={{
-                width: '36px', height: '36px', borderRadius: '9px',
-                background: i === 5 ? 'var(--accent-blue-light)' : 'var(--bg-secondary)',
-                border: `1px solid ${i === 5 ? '#BFDBFE' : 'var(--border-default)'}`,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto var(--space-3)',
-                fontSize: '15px',
-              }}>
-                {step.icon}
-              </div>
-              {/* Label */}
-              <div style={{
-                fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)',
-                marginBottom: 'var(--space-1)',
-              }}>
-                {step.label}
-              </div>
-              {/* Desc */}
-              <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', lineHeight: 1.45 }}>
-                {step.desc}
+        {/* 5-Stage Cards Grid */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: '16px',
+            position: 'relative',
+          }}
+        >
+          {STAGES.map((s) => (
+            <div
+              key={s.step}
+              className="clinical-card"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                padding: '24px',
+                transition: 'border-color 150ms ease, box-shadow 150ms ease',
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'baseline',
+                    marginBottom: '16px',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      color: 'var(--teal)',
+                    }}
+                  >
+                    STAGE {s.step}
+                  </span>
+                </div>
+                <h3
+                  style={{
+                    fontSize: '17px',
+                    fontWeight: 600,
+                    color: 'var(--ink)',
+                    marginBottom: '12px',
+                    lineHeight: 1.3,
+                  }}
+                >
+                  {s.name}
+                </h3>
+                <p
+                  style={{
+                    fontSize: '13px',
+                    lineHeight: 1.5,
+                    color: 'var(--mid-gray)',
+                    marginBottom: '20px',
+                  }}
+                >
+                  {s.desc}
+                </p>
               </div>
 
-              {/* Arrow connector */}
-              {i < STEPS.length - 1 && (
-                <div style={{
-                  position: 'absolute', right: '-7px', top: '50%', transform: 'translateY(-50%)',
-                  zIndex: 2, width: '14px', height: '14px',
-                  background: 'var(--bg-surface)', border: '1px solid var(--border-default)',
-                  borderRadius: '3px', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '8px', color: 'var(--text-tertiary)',
-                }}>
-                  ›
-                </div>
-              )}
+              <div
+                style={{
+                  paddingTop: '12px',
+                  borderTop: '1px solid var(--hairline)',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  color: 'var(--ink-soft)',
+                }}
+              >
+                {s.metric}
+              </div>
             </div>
           ))}
         </div>
       </div>
     </section>
   );
-}
+};

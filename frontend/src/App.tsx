@@ -4,62 +4,46 @@ import { Hero } from './components/Hero';
 import { TrustStrip } from './components/TrustStrip';
 import { WorkflowSection } from './components/WorkflowSection';
 import { ScreeningDemo } from './components/ScreeningDemo';
-import { QualityModule } from './components/QualityModule';
-import { ExplainabilitySection } from './components/ExplainabilitySection';
-import { SeverityScale } from './components/SeverityScale';
-import { HumanInLoop } from './components/HumanInLoop';
 import { RuralDeployment } from './components/RuralDeployment';
 import { ValidationSection } from './components/ValidationSection';
-import { FinalCTA } from './components/FinalCTA';
 import { Footer } from './components/Footer';
 import { ScreeningStudio } from './components/ScreeningStudio';
+import { ExplainabilitySection } from './components/ExplainabilitySection';
 
 export function App() {
   const [screeningOpen, setScreeningOpen] = useState(false);
 
   return (
-    <div style={{ background: 'linear-gradient(180deg, #061521 0%, #0a1a2b 100%)', minHeight: '100vh', color: 'var(--text-primary)' }}>
+    <div style={{ minHeight: '100vh', backgroundColor: 'var(--canvas)', color: 'var(--ink)' }}>
       {screeningOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(2, 6, 23, 0.72)',
-            backdropFilter: 'blur(8px)',
-            zIndex: 50,
-            overflowY: 'auto',
-            padding: '32px 20px',
-          }}
-        >
-          <div style={{ maxWidth: '1500px', margin: '0 auto', position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => setScreeningOpen(false)}
-              style={{
-                position: 'absolute',
-                top: '12px',
-                right: '12px',
-                zIndex: 1,
-                border: '1px solid rgba(148, 163, 184, 0.5)',
-                background: 'rgba(15, 23, 42, 0.8)',
-                color: '#fff',
-                borderRadius: '999px',
-                padding: '10px 14px',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Close
-            </button>
+        <div className="modal-overlay">
+          <div className="modal-content">
             <div
               style={{
-                background: 'linear-gradient(180deg, rgba(8, 20, 33, 0.96), rgba(13, 28, 46, 0.96))',
-                borderRadius: '28px',
-                border: '1px solid rgba(148, 163, 184, 0.28)',
-                boxShadow: '0 28px 80px rgba(2, 6, 23, 0.65)',
-                overflow: 'hidden',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '16px 24px',
+                borderBottom: '1px solid var(--hairline)',
+                backgroundColor: 'var(--surface-alt)',
               }}
             >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)' }}>
+                  Autonomous DR Screening Studio
+                </span>
+                <span className="badge-teal">MathWorks SIH 26038</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScreeningOpen(false)}
+                className="btn-secondary"
+                style={{ padding: '6px 14px', fontSize: '13px' }}
+              >
+                Close
+              </button>
+            </div>
+            <div>
               <ScreeningStudio />
             </div>
           </div>
@@ -70,14 +54,10 @@ export function App() {
       <Hero onLaunch={() => setScreeningOpen(true)} />
       <TrustStrip />
       <WorkflowSection />
-      <ScreeningDemo />
-      <QualityModule />
+      <ScreeningDemo onLaunch={() => setScreeningOpen(true)} />
       <ExplainabilitySection />
-      <SeverityScale />
-      <HumanInLoop />
-      <RuralDeployment />
       <ValidationSection />
-      <FinalCTA onLaunch={() => setScreeningOpen(true)} />
+      <RuralDeployment />
       <Footer />
     </div>
   );

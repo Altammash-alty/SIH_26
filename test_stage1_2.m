@@ -60,6 +60,10 @@ else
     for i = 1:numCases
         imgPath = fullfile(realImageDir, imageFiles(i).name);
         rawImg = imread(imgPath);
+        maxDim = max(size(rawImg, 1), size(rawImg, 2));
+        if maxDim > 768
+            rawImg = imresize(rawImg, 768 / maxDim);
+        end
         testCases(i).name = sprintf('Real Validation Image %d: %s', i, imageFiles(i).name);
         testCases(i).image = rawImg;
         testCases(i).expectedPass = true;
@@ -222,24 +226,3 @@ sgtitle('Stage 2: Fundus Image Preprocessing & Contrast Enhancement Pipeline', .
 fprintf('==================================================================\n');
 fprintf('   TEST COMPLETE: All Stage 1 & Stage 2 functions validated!      \n');
 fprintf('==================================================================\n\n');
-
-    R_base = R_base - 0.25 * vesselTree;
-    G_base = G_base - 0.35 * vesselTree;
-    B_base = B_base - 0.15 * vesselTree;
-    
-    % Add mild realistic sensor noise
-    rng(42); % Fixed seed for repeatability
-    noise = (randn(imgSize, imgSize) * 0.015);
-    noise(~fovMask) = 0;
-    
-    R_final = max(0, min(1, R_base + noise));
-    G_final = max(0, min(1, G_base + noise));
-    B_final = max(0, min(1, B_base + noise));
-    
-    % Apply outer black mask
-    R_final(~fovMask) = 0;
-    G_final(~fovMask) = 0;
-    B_final(~fovMask) = 0;
-    
-    fundusImg = cat(3, R_final, G_final, B_final);
-end

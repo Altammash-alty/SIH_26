@@ -73,13 +73,14 @@ function [grade, gradeName, confidence, probabilities, dmeRisk, urgency, icd10Co
     quadDark    = features.quadrantDark;
     quadsSevere = features.quadsWithSevereHemo;
     neoRatio    = features.neovascularizationRatio;
+    hasAnyLesionEvidence = (darkCount > 0) || (brightCount > 0);
 
     % Default to neural prediction
     finalGrade = nnGrade;
     decisionRule = "Multiclass Deep Feature Softmax Classification";
 
     % Clinical Rule 1: Proliferative DR Check
-    if neoRatio >= 0.50 || (darkCount >= 60 && features.vesselTortuosity > 1.30)
+    if hasAnyLesionEvidence && (neoRatio >= 0.50 || (darkCount >= 60 && features.vesselTortuosity > 1.30))
         finalGrade = 4;
         decisionRule = "ICDR Grade 4: Significant Neovascularization / Preretinal Proliferation detected";
         

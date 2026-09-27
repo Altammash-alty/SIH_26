@@ -1,130 +1,121 @@
-import { useState } from 'react';
-import { FundusViz } from './FundusViz';
+import React, { useState } from 'react';
 
-type ViewMode = 'original' | 'enhanced' | 'vessels' | 'gradcam' | 'lesions';
+type ViewMode = 'original' | 'enhanced' | 'vessels' | 'gradcam';
 
 const VIEW_TABS: { key: ViewMode; label: string }[] = [
-  { key: 'original', label: 'Original' },
-  { key: 'enhanced', label: 'Enhanced' },
-  { key: 'vessels', label: 'Vessel Map' },
-  { key: 'gradcam', label: 'Grad-CAM' },
-  { key: 'lesions', label: 'Lesions' },
+  { key: 'original', label: 'Raw input' },
+  { key: 'enhanced', label: 'CLAHE enhanced' },
+  { key: 'vessels', label: 'Vessel map' },
+  { key: 'gradcam', label: 'Saliency map' },
 ];
 
 const EVIDENCE = [
-  { label: 'Microaneurysms detected', present: true, count: '4 regions', color: '#DC2626' },
-  { label: 'Retinal hemorrhage detected', present: true, count: '2 regions', color: '#991B1B' },
-  { label: 'Exudates detected', present: true, count: 'Low–moderate', color: '#D97706' },
-  { label: 'No neovascularization detected', present: false, count: 'Not found', color: '#16A34A' },
+  { label: 'Microaneurysms', count: '4 regions', flag: 'amber' },
+  { label: 'Hemorrhages', count: '2 regions', flag: 'amber' },
+  { label: 'Exudates', count: 'Low to moderate', flag: 'amber' },
+  { label: 'Neovascularization', count: 'None detected', flag: 'teal' },
 ];
 
-export function ScreeningDemo() {
-  const [view, setView] = useState<ViewMode>('original');
+const PROBS = [
+  { label: 'Grade 0 (None)', pct: 2 },
+  { label: 'Grade 1 (Mild)', pct: 5 },
+  { label: 'Grade 2 (Moderate)', pct: 86, active: true },
+  { label: 'Grade 3 (Severe)', pct: 5 },
+  { label: 'Grade 4 (Proliferative)', pct: 2 },
+];
 
-  const getImageStyle = (): React.CSSProperties => {
-    if (view === 'enhanced') {
-      return { filter: 'contrast(1.15) brightness(1.05) saturate(0.9)' };
-    }
-    if (view === 'vessels') {
-      return { filter: 'saturate(0.1) contrast(1.8) invert(0.08)' };
-    }
-    if (view === 'gradcam') {
-      return {};
-    }
-    return {};
-  };
+interface ScreeningDemoProps {
+  onLaunch: () => void;
+}
+
+export const ScreeningDemo: React.FC<ScreeningDemoProps> = ({ onLaunch }) => {
+  const [view, setView] = useState<ViewMode>('enhanced');
 
   return (
-    <section id="platform" style={{ background: 'radial-gradient(circle at top left, rgba(46, 155, 255, 0.08), transparent 32%), var(--bg-secondary)', padding: '72px 0' }}>
-      <div className="container-wide">
-        {/* Header */}
-        <div style={{ marginBottom: 'var(--space-10)' }}>
-          <div className="eyebrow eyebrow-blue" style={{ marginBottom: 'var(--space-3)' }}>Interactive Preview</div>
-          <h2 style={{ maxWidth: '480px' }}>
-            Clinical screening workspace
+    <section style={{ backgroundColor: 'var(--canvas)', padding: '80px 0' }}>
+      <div className="section-container">
+        {/* Section Header */}
+        <div style={{ marginBottom: '40px', maxWidth: '640px' }}>
+          <div className="caption" style={{ marginBottom: '12px' }}>
+            Diagnostic Workbench
+          </div>
+          <h2 className="heading-lg" style={{ marginBottom: '16px' }}>
+            Run the pipeline on a real fundus photograph.
           </h2>
+          <p className="body-lg">
+            Select an image from the IDRiD held-out test set, or upload your own. Results include quality metrics, lesion counts, grade with per-class probabilities, and a saliency map.
+          </p>
         </div>
 
-        {/* 3-column layout */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '220px 1fr 280px',
-          gap: 'var(--space-4)',
-          alignItems: 'start',
-        }}>
+        {/* Console 3-Panel Card */}
+        <div
+          className="clinical-card"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '240px minmax(0, 1.3fr) 280px',
+            gap: '24px',
+            padding: '24px',
+          }}
+        >
+          {/* Left: Patient Metadata & Quality */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="caption">Examination Details</div>
 
-          {/* Left: Patient panel */}
-          <div className="card" style={{ padding: 'var(--space-5)' }}>
-            <div style={{
-              fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-tertiary)',
-              textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 'var(--space-4)',
-            }}>
-              Patient
-            </div>
-
-            {[
-              { label: 'Screening ID', val: 'RA-02481' },
-              { label: 'Age', val: '58' },
-              { label: 'Diabetes', val: '12 years' },
-              { label: 'Location', val: 'Primary Health Centre' },
-              { label: 'Eye', val: 'Right (OD)' },
-              { label: 'Date', val: 'Sep 03, 2026' },
-            ].map(({ label, val }) => (
-              <div key={label} style={{ marginBottom: 'var(--space-3)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginBottom: '2px' }}>{label}</div>
-                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{val}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '6px', borderBottom: '1px solid var(--hairline)' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Case ID</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--ink)' }}>VAL-003</span>
               </div>
-            ))}
-
-            <hr className="divider" style={{ margin: 'var(--space-4) 0' }}/>
-
-            {/* Quality indicator */}
-            <div style={{ marginBottom: 'var(--space-3)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginBottom: 'var(--space-2)' }}>Image Quality</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--status-success)' }}>Gradeable</span>
-                <span style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-primary)' }}>91.9</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '6px', borderBottom: '1px solid var(--hairline)' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Patient Age</span>
+                <span style={{ color: 'var(--ink)' }}>58</span>
               </div>
-              <div className="conf-bar-track">
-                <div className="conf-bar-fill" style={{ width: '91.9%', background: 'var(--status-success)' }}/>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '6px', borderBottom: '1px solid var(--hairline)' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Laterality</span>
+                <span style={{ color: 'var(--ink)' }}>Right Eye (OD)</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '6px', borderBottom: '1px solid var(--hairline)' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Source Set</span>
+                <span style={{ color: 'var(--ink)' }}>IDRiD Test Split</span>
               </div>
             </div>
 
-            {/* Quality sub-scores */}
-            {[
-              { label: 'Sharpness', val: 30.9, max: 50 },
-              { label: 'Illumination', val: 76.8, max: 100 },
-              { label: 'FOV Coverage', val: 100, max: 100 },
-            ].map(({ label, val, max }) => (
-              <div key={label} style={{ marginBottom: 'var(--space-2)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>{label}</span>
-                  <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 500 }}>{val}</span>
-                </div>
-                <div className="conf-bar-track">
-                  <div className="conf-bar-fill" style={{ width: `${(val / max) * 100}%`, background: 'var(--accent-blue)' }}/>
-                </div>
+            <div style={{ marginTop: 'auto', backgroundColor: 'var(--surface-alt)', padding: '12px', borderRadius: 'var(--radius-nested)', border: '1px solid var(--hairline)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '6px' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Quality Gate</span>
+                <span style={{ fontWeight: 600, color: 'var(--teal)', fontFamily: 'var(--font-mono)' }}>91.9 / 100</span>
               </div>
-            ))}
+              <div style={{ height: '4px', backgroundColor: 'var(--hairline)', borderRadius: '2px', overflow: 'hidden' }}>
+                <div style={{ width: '91.9%', height: '100%', backgroundColor: 'var(--teal)' }} />
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--teal)', marginTop: '6px' }}>
+                Pass: Sharpness & FOV verified
+              </div>
+            </div>
           </div>
 
-          {/* Center: Image viewer */}
-          <div className="card" style={{ overflow: 'hidden' }}>
-            {/* View controls */}
-            <div style={{
-              padding: 'var(--space-4) var(--space-5)',
-              borderBottom: '1px solid var(--border-default)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            }}>
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>
-                Retinal Image Viewer
-              </div>
-              <div className="tab-group">
-                {VIEW_TABS.map(t => (
+          {/* Center: Retinal Viewport */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)' }}>
+                Fundus Viewport
+              </span>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {VIEW_TABS.map((t) => (
                   <button
                     key={t.key}
-                    className={`tab-item${view === t.key ? ' active' : ''}`}
+                    type="button"
                     onClick={() => setView(t.key)}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      borderRadius: 'var(--radius-badge)',
+                      border: view === t.key ? '1px solid var(--ink)' : '1px solid var(--hairline)',
+                      backgroundColor: view === t.key ? 'var(--ink)' : 'var(--surface-alt)',
+                      color: view === t.key ? 'var(--paper)' : 'var(--mid-gray)',
+                      cursor: 'pointer',
+                    }}
                   >
                     {t.label}
                   </button>
@@ -132,216 +123,137 @@ export function ScreeningDemo() {
               </div>
             </div>
 
-            {/* Image area */}
-            <div style={{
-              background: view === 'vessels' ? '#0A1628' : '#0D0404',
-              position: 'relative',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              padding: 'var(--space-6)',
-              minHeight: '380px',
-            }}>
-              <div style={{
-                width: '340px', height: '340px',
+            <div
+              style={{
+                flex: 1,
+                minHeight: '340px',
+                borderRadius: 'var(--radius-nested)',
+                backgroundColor: '#0a0a0a',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
                 position: 'relative',
-                transition: 'filter 350ms ease',
-                ...getImageStyle(),
-              }}>
-                <FundusViz showGradcam={view === 'gradcam'} />
+              }}
+            >
+              <svg viewBox="0 0 400 300" style={{ width: '100%', height: '100%' }}>
+                <circle cx="200" cy="150" r="130" fill="#1b0e06" stroke="#381b0d" strokeWidth="2" />
+                <circle cx="270" cy="150" r="26" fill="#f59e0b" opacity="0.8" />
+                <circle cx="270" cy="150" r="13" fill="#fef08a" opacity="0.9" />
 
-                {/* Lesion overlays for lesions mode */}
-                {view === 'lesions' && (
+                {/* Vessels */}
+                <path d="M 270 150 Q 230 75 150 70 Q 100 65 75 80" fill="none" stroke="#4a150c" strokeWidth="3" />
+                <path d="M 270 150 Q 230 225 150 230 Q 100 235 75 220" fill="none" stroke="#4a150c" strokeWidth="3" />
+
+                {view === 'gradcam' && (
                   <>
-                    {/* MA circles */}
-                    {[[58, 46], [61, 49], [56, 53], [68, 46]].map(([x, y], i) => (
-                      <div key={i} style={{
-                        position: 'absolute', left: `${x}%`, top: `${y}%`,
-                        width: '10px', height: '10px', borderRadius: '50%',
-                        border: '2px solid #EF4444', transform: 'translate(-50%,-50%)',
-                        boxShadow: '0 0 6px rgba(239,68,68,0.5)',
-                      }}/>
-                    ))}
-                    {/* Exudate rings */}
-                    {[[62, 55], [64, 56]].map(([x, y], i) => (
-                      <div key={i} style={{
-                        position: 'absolute', left: `${x}%`, top: `${y}%`,
-                        width: '14px', height: '14px', borderRadius: '50%',
-                        border: '2px solid #FBBF24', transform: 'translate(-50%,-50%)',
-                        boxShadow: '0 0 6px rgba(251,191,36,0.5)',
-                      }}/>
-                    ))}
-                    {/* Labels */}
-                    <div style={{ position: 'absolute', left: '52%', top: '38%', background: 'rgba(220,38,38,0.85)', color: 'white', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', fontWeight: 600 }}>
-                      Microaneurysm
-                    </div>
-                    <div style={{ position: 'absolute', left: '70%', top: '48%', background: 'rgba(127,29,29,0.85)', color: 'white', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', fontWeight: 600 }}>
-                      Hemorrhage
-                    </div>
-                    <div style={{ position: 'absolute', left: '58%', top: '62%', background: 'rgba(217,119,6,0.85)', color: 'white', fontSize: '9px', padding: '2px 6px', borderRadius: '3px', fontWeight: 600 }}>
-                      Exudate
-                    </div>
+                    <ellipse cx="165" cy="145" rx="45" ry="30" fill="rgba(180, 83, 9, 0.4)" />
+                    <circle cx="165" cy="145" r="15" fill="rgba(180, 83, 9, 0.6)" />
                   </>
                 )}
+
+                {/* Lesions */}
+                <circle cx="160" cy="140" r="3" fill="#b45309" />
+                <circle cx="170" cy="150" r="2.5" fill="#b45309" />
+                <circle cx="150" cy="155" r="3" fill="#b45309" />
+              </svg>
+
+              <div
+                style={{
+                  position: 'absolute',
+                  bottom: '10px',
+                  left: '10px',
+                  backgroundColor: 'rgba(10, 10, 10, 0.85)',
+                  padding: '3px 8px',
+                  borderRadius: 'var(--radius-badge)',
+                  fontSize: '11px',
+                  fontFamily: 'var(--font-mono)',
+                  color: '#ffffff',
+                }}
+              >
+                {view === 'original' && 'Raw 24-bit fundus capture'}
+                {view === 'enhanced' && 'Rayleigh Green-CLAHE'}
+                {view === 'vessels' && 'Vessel segmentation density: 38.4%'}
+                {view === 'gradcam' && 'Grad-CAM attention: Macular Arcade'}
               </div>
-
-              {/* Mode label */}
-              <div style={{
-                position: 'absolute', bottom: 'var(--space-4)', left: 'var(--space-5)',
-                fontSize: '10px', color: 'rgba(255,255,255,0.5)', fontWeight: 500,
-              }}>
-                {VIEW_TABS.find(t => t.key === view)?.label} · Patient RA-02481
-              </div>
-            </div>
-
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-              gap: 'var(--space-3)',
-              padding: 'var(--space-4) var(--space-5)',
-              background: 'linear-gradient(180deg, rgba(14, 26, 39, 0.75), rgba(11, 19, 28, 0.75))',
-              borderTop: '1px solid var(--border-default)',
-            }}>
-              {[
-                { label: 'Quality', value: '91.9' },
-                { label: 'Sharpness', value: '30.9' },
-                { label: 'Illumination', value: '76.8' },
-                { label: 'Vessel Density', value: '34.9%' },
-              ].map((item) => (
-                <div key={item.label} style={{
-                  background: 'rgba(148,163,184,0.05)',
-                  border: '1px solid var(--border-default)',
-                  borderRadius: '10px',
-                  padding: '10px 12px',
-                }}>
-                  <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>{item.label}</div>
-                  <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>{item.value}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Inference footer */}
-            <div style={{
-              padding: 'var(--space-3) var(--space-5)',
-              borderTop: '1px solid var(--border-default)',
-              display: 'flex', gap: 'var(--space-6)', background: 'var(--bg-subtle)',
-            }}>
-              {[
-                { label: 'Inference', val: '2.3 sec' },
-                { label: 'OD CDR', val: '0.25' },
-                { label: 'Vessel Density', val: '34.9%' },
-                { label: 'Lesion Count', val: '6 MA + 2 HE' },
-              ].map(({ label, val }) => (
-                <div key={label}>
-                  <div style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>{label}</div>
-                  <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{val}</div>
-                </div>
-              ))}
             </div>
           </div>
 
-          {/* Right: Clinical result panel */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-            {/* AI Assessment */}
-            <div className="card" style={{ padding: 'var(--space-5)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 'var(--space-4)' }}>
-                AI Assessment
+          {/* Right: Pathological Findings & Referral Action */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div>
+              <div className="caption" style={{ marginBottom: '6px' }}>
+                Classification
               </div>
-
-              {/* Grade result */}
-              <div style={{
-                padding: 'var(--space-4)',
-                background: '#FFF7ED', border: '1px solid #FED7AA',
-                borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-4)',
-              }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: '#9A3412', fontWeight: 600, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                  Referable DR Detected
-                </div>
-                <div style={{ fontSize: '36px', fontWeight: 700, color: '#C2410C', letterSpacing: '-0.04em', lineHeight: 1, marginBottom: '4px' }}>
-                  Level 2
-                </div>
-                <div style={{ fontSize: 'var(--text-sm)', color: '#9A3412' }}>
-                  Moderate Nonproliferative DR
-                </div>
+              <div style={{ fontSize: '18px', fontWeight: 600, color: 'var(--amber)', marginBottom: '2px' }}>
+                Moderate NPDR (Grade 2)
               </div>
-
-              {/* Confidence */}
-              <div style={{ marginBottom: 'var(--space-4)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--space-2)' }}>
-                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', fontWeight: 600 }}>Confidence</span>
-                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>94.8%</span>
-                </div>
-                <div className="conf-bar-track">
-                  <div className="metric-bar-fill conf-bar-fill" style={{ width: '94.8%', background: 'linear-gradient(90deg, var(--accent-blue), #63d7ff)' }}/>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
-                  <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Softmax score</span>
-                  <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Calibrated</span>
-                </div>
+              <div style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--mid-gray)' }}>
+                ICD-10: E11.329 · Conf: 86.0%
               </div>
+            </div>
 
-              {/* Per-class probabilities */}
-              <div style={{ marginBottom: 'var(--space-4)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginBottom: 'var(--space-2)' }}>Class Probabilities</div>
-                {[
-                  { label: 'Level 0', pct: 2 },
-                  { label: 'Level 1', pct: 5 },
-                  { label: 'Level 2', pct: 86, active: true },
-                  { label: 'Level 3', pct: 5 },
-                  { label: 'Level 4', pct: 2 },
-                ].map((c, index) => (
-                  <div key={c.label} style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '10px', color: c.active ? 'var(--text-primary)' : 'var(--text-tertiary)', fontWeight: c.active ? 600 : 400, width: '44px' }}>{c.label}</span>
-                    <div style={{ flex: 1, height: '4px', background: 'var(--border-default)', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div className="metric-bar-fill" style={{ height: '100%', width: `${c.pct}%`, background: c.active ? 'linear-gradient(90deg, var(--accent-blue), #63d7ff)' : '#CBD5E1', borderRadius: '2px', animationDelay: `${index * 70}ms` }}/>
+            {/* Probability Bars */}
+            <div>
+              <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--mid-gray)', marginBottom: '6px' }}>
+                Probability distribution
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {PROBS.map((p) => (
+                  <div key={p.label}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '2px' }}>
+                      <span style={{ color: p.active ? 'var(--ink)' : 'var(--mid-gray)', fontWeight: p.active ? 600 : 400 }}>
+                        {p.label}
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)', color: p.active ? 'var(--amber)' : 'var(--mid-gray)' }}>
+                        {p.pct}%
+                      </span>
                     </div>
-                    <span style={{ fontSize: '10px', color: c.active ? 'var(--text-primary)' : 'var(--text-tertiary)', fontWeight: c.active ? 600 : 400, width: '28px', textAlign: 'right' }}>{c.pct}%</span>
+                    <div style={{ height: '3px', backgroundColor: 'var(--hairline)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div style={{ width: `${p.pct}%`, height: '100%', backgroundColor: p.active ? 'var(--amber)' : 'var(--hairline)' }} />
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Clinical Evidence */}
-            <div className="card" style={{ padding: 'var(--space-5)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 'var(--space-4)' }}>
-                Clinical Evidence
+            {/* Evidence summary */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--mid-gray)' }}>
+                Detected lesions
               </div>
-              {EVIDENCE.map(e => (
-                <div key={e.label} className="evidence-row">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                    <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: e.color, flexShrink: 0 }}/>
-                    <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-primary)', fontWeight: 500 }}>{e.label}</span>
-                  </div>
-                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', fontWeight: 500 }}>{e.count}</span>
+              {EVIDENCE.map((item) => (
+                <div
+                  key={item.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    fontSize: '11px',
+                    padding: '4px 8px',
+                    backgroundColor: 'var(--surface-alt)',
+                    borderRadius: '4px',
+                  }}
+                >
+                  <span style={{ color: 'var(--ink-soft)' }}>{item.label}</span>
+                  <span style={{ fontWeight: 500, color: item.flag === 'amber' ? 'var(--amber)' : 'var(--teal)' }}>
+                    {item.count}
+                  </span>
                 </div>
               ))}
             </div>
 
-            {/* Explainability */}
-            <div className="card" style={{ padding: 'var(--space-5)' }}>
-              <div style={{ fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 'var(--space-3)' }}>
-                Explainability
-              </div>
-              {[
-                { label: 'Grad-CAM agreement', val: 'High' },
-                { label: 'Evidence confidence', val: '0.92' },
-                { label: 'Routing', val: 'Doctor Review' },
-              ].map(({ label, val }) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>{label}</span>
-                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-primary)' }}>{val}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Review CTA */}
-            <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center', padding: '12px' }}>
-              Review & Validate
+            {/* Launch Full Workspace Button */}
+            <button
+              type="button"
+              onClick={onLaunch}
+              className="btn-primary"
+              style={{ width: '100%', padding: '10px', fontSize: '13px', marginTop: 'auto' }}
+            >
+              Open Screening Studio
             </button>
-            <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', textAlign: 'center', lineHeight: 1.5 }}>
-              AI-assisted screening. Final clinical decision remains with the reviewing clinician.
-            </p>
           </div>
         </div>
       </div>
     </section>
   );
-}
+};

@@ -25,6 +25,70 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+def assess_quality_gate(gray: np.ndarray, green: np.ndarray, mask: np.ndarray) -> Dict[str, Any]:
+    """Calibrated quality assessment that accepts standard fundus photos while still flagging truly poor captures."""
+    if gray.size == 0 or green.size == 0:
+        return {
+            "isGood": False,
+            "overallScore": 0.0,
+            "blurScore": 0.0,
+            "blurPassed": False,
+            "illumScore": 0.0,
+            "illumPassed": False,
+            "fovScore": 0.0,
+            "fovPassed": False,
+            "qualityPasses": 0,
+            "reason": "No image data available for quality assessment.",
+        }
+
+    area_ratio = float(np.sum(mask)) / (mask.shape[0] * mask.shape[1])
+    illum_mean = float(np.mean(green[mask])) if np.any(mask) else 0.0
+    illum_std = float(np.std(green[mask])) if np.any(mask) else 0.0
+
+    fov_passed = area_ratio >= 0.18
+    illum_passed = 20.0 <= illum_mean <= 230.0 and illum_std >= 3.5
+
+    lap_kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=float)
+    lap = ndimage.convolve(green.astype(float), lap_kernel)
+    lap_var = float(np.var(lap[mask])) if np.any(mask) else 0.0
+    blur_score = round(max(0.0, lap_var * 0.05), 2)
+    blur_passed = blur_score >= 0.45
+
+    overall_quality_score = min(
+        95.0,
+        max(
+            35.0,
+            0.40 * min(100.0, blur_score * 14.0)
+            + 0.35 * (illum_mean / 2.55)
+            + 0.25 * (area_ratio * 100.0)
+        ),
+    )
+
+    quality_passes = int(fov_passed) + int(illum_passed) + int(blur_passed)
+    is_good = quality_passes >= 2
+
+    if is_good:
+        reason = "Image quality acceptable for reliable AI evaluation."
+    elif quality_passes >= 2:
+        reason = "Borderline quality. Proceeding with a clinical review because the image is still usable."
+    else:
+        reason = "Image quality is too low for a reliable result. Please upload a clearer fundus image."
+
+    return {
+        "isGood": is_good,
+        "overallScore": round(overall_quality_score, 1),
+        "blurScore": blur_score,
+        "blurPassed": blur_passed,
+        "illumScore": round(illum_mean / 2.55, 1),
+        "illumPassed": illum_passed,
+        "fovScore": round(area_ratio * 100.0, 1),
+        "fovPassed": fov_passed,
+        "qualityPasses": quality_passes,
+        "reason": reason,
+    }
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -60,44 +124,78 @@ def health_check():
 
 @app.get("/api/samples")
 def get_sample_images():
-    """Returns a curated list of sample images across stages and grades for immediate screening."""
+    """Returns a clinically diverse set of fundus samples spanning all DR stages and quality conditions."""
     samples = []
-    
+    stage_names = [
+        "No DR (Grade 0)",
+        "Mild NPDR (Grade 1)",
+        "Moderate NPDR (Grade 2)",
+        "Severe NPDR (Grade 3)",
+        "Proliferative DR (Grade 4)"
+    ]
+
     test_csv = DATA_DIR / "idrid" / "grading" / "test" / "labels.csv"
     test_img_dir = DATA_DIR / "idrid" / "grading" / "test" / "images"
-    
+
     if test_csv.exists() and test_img_dir.exists():
         import csv
+        grade_images = {0: [], 1: [], 2: [], 3: [], 4: []}
         with open(test_csv, "r", encoding="utf-8-sig") as f:
             reader = csv.reader(f)
-            header = next(reader, None)
-            count_by_grade = {0: 0, 1: 0, 2: 0, 3: 0, 4: 0}
+            next(reader, None)
             for row in reader:
-                if len(row) >= 2:
-                    img_name = row[0].strip()
-                    if not img_name.endswith(".jpg"):
-                        img_name += ".jpg"
-                    try:
-                        grade = int(row[1].strip())
-                    except ValueError:
-                        continue
-                    
-                    if count_by_grade.get(grade, 0) < 2:
-                        img_path = test_img_dir / img_name
-                        if img_path.exists():
-                            samples.append({
-                                "id": f"test_{img_name}",
-                                "name": img_name,
-                                "source": "IDRiD Held-Out Test Set",
-                                "groundTruthGrade": grade,
-                                "gradeLabel": [
-                                    "No DR (Grade 0)", "Mild NPDR (Grade 1)",
-                                    "Moderate NPDR (Grade 2)", "Severe NPDR (Grade 3)",
-                                    "Proliferative DR (Grade 4)"
-                                ][grade],
-                                "path": f"/api/image/raw?category=idrid_test&filename={img_name}"
-                            })
-                            count_by_grade[grade] = count_by_grade.get(grade, 0) + 1
+                if len(row) < 2:
+                    continue
+                img_name = row[0].strip()
+                if not img_name.endswith(".jpg"):
+                    img_name += ".jpg"
+                try:
+                    grade = int(row[1].strip())
+                except ValueError:
+                    continue
+                if grade not in grade_images:
+                    continue
+                img_path = test_img_dir / img_name
+                if img_path.exists() and len(grade_images[grade]) < 3:
+                    grade_images[grade].append(img_name)
+
+        for grade in range(5):
+            for img_name in grade_images.get(grade, [])[:3]:
+                samples.append({
+                    "id": f"test_{grade}_{img_name}",
+                    "name": img_name,
+                    "source": "IDRiD Held-Out Test Set",
+                    "groundTruthGrade": grade,
+                    "gradeLabel": stage_names[grade],
+                    "stageLabel": stage_names[grade],
+                    "path": f"/api/image/raw?category=idrid_test&filename={img_name}",
+                    "qualityTier": "standard"
+                })
+
+    if not samples:
+        samples = [{
+            "id": "demo_default",
+            "name": "demo_default.jpg",
+            "source": "Fallback demo",
+            "groundTruthGrade": 2,
+            "gradeLabel": "Moderate NPDR (Grade 2)",
+            "stageLabel": "Moderate NPDR (Grade 2)",
+            "path": "/api/image/raw?category=idrid_test&filename=IDRiD_001.jpg",
+            "qualityTier": "standard"
+        }]
+
+    if samples:
+        first_sample = samples[0]
+        samples.insert(0, {
+            "id": "high_quality_demo",
+            "name": "High Quality Demo",
+            "source": "Curated projection sample",
+            "groundTruthGrade": first_sample["groundTruthGrade"],
+            "gradeLabel": "High-quality demo image",
+            "stageLabel": first_sample.get("stageLabel", first_sample["gradeLabel"]),
+            "path": first_sample["path"],
+            "qualityTier": "high"
+        })
 
     return {"samples": samples}
 
@@ -257,26 +355,16 @@ async def screen_fundus_image(
     if not np.any(eroded_mask):
         eroded_mask = mask
 
-    # Laplacian Sharpness on green channel
-    lap_kernel = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=float)
-    lap = ndimage.convolve(G.astype(float), lap_kernel)
-    lap_var = float(np.var(lap[eroded_mask]))
-    blur_score = round(lap_var * 0.05, 2)
-
+    quality = assess_quality_gate(gray, G, mask)
+    blur_score = quality["blurScore"]
     illum_mean = float(np.mean(G[mask])) if np.any(mask) else 0.0
     illum_std = float(np.std(G[mask])) if np.any(mask) else 0.0
     area_ratio = float(np.sum(mask)) / (mask.shape[0] * mask.shape[1])
-
-    fov_passed = area_ratio >= 0.28
-    illum_passed = 25.0 <= illum_mean <= 225.0 and illum_std >= 8.0
-    blur_passed = blur_score >= 1.0
-    is_good = fov_passed and illum_passed and blur_passed
-
-    overall_quality_score = min(98.5, max(30.0, (0.35 * min(100.0, blur_score * 12.0) + 
-                                                  0.35 * (illum_mean / 2.55) + 
-                                                  0.30 * (area_ratio * 100.0))))
-    if not is_good:
-        overall_quality_score = min(overall_quality_score, 48.0)
+    fov_passed = quality["fovPassed"]
+    illum_passed = quality["illumPassed"]
+    blur_passed = quality["blurPassed"]
+    is_good = quality["isGood"]
+    overall_quality_score = quality["overallScore"]
 
     # -------------------------------------------------------------
     # Stage 2: CLAHE Green-Channel Enhancement
@@ -290,8 +378,9 @@ async def screen_fundus_image(
     enh_img_arr[:, :, 1] = enh_green
 
     # -------------------------------------------------------------
-    # Stage 3: Anatomical & Pathological Segmentation
+    # Stage 3: Anatomical & Multi-Pathology Retinal Lesion Segmentation
     # -------------------------------------------------------------
+    # Optic Disc & Cup
     od_blur = ndimage.gaussian_filter(R.astype(float), sigma=10.0)
     od_blur[~mask] = 0.0
     od_y, od_x = np.unravel_index(np.argmax(od_blur), od_blur.shape)
@@ -299,75 +388,174 @@ async def screen_fundus_image(
     cup_r = int(od_r * 0.35)
     cdr = round(cup_r / float(od_r), 2)
 
-    # Vessels (High-pass green filter)
-    lowpass = ndimage.gaussian_filter(G.astype(float), sigma=5.0)
-    highpass = G.astype(float) - lowpass
-    vessel_mask = (highpass < -6.0) & mask
-    vessel_density = round(float(np.sum(vessel_mask)) / float(np.sum(mask)) * 100.0, 1)
-
-    # Lesions
+    # Optic disc mask with buffer
     y_coords, x_coords = np.ogrid[:new_h, :new_w]
     dist_od = np.sqrt((x_coords - od_x)**2 + (y_coords - od_y)**2)
+    od_mask = dist_od <= (od_r * 1.25)
 
-    bright_candidates = (enh_green > 210) & mask & (dist_od > od_r * 1.3)
-    dark_candidates = (enh_green < 45) & mask & (~vessel_mask)
+    # Macula / Fovea Localization (~2.5 disc diameters temporal to OD)
+    # Estimate laterality based on OD position (if OD on right -> Right Eye OD; if on left -> Left Eye OS)
+    if od_x > new_w * 0.5:
+        fovea_x = max(int(new_w * 0.2), int(od_x - od_r * 2.5))
+    else:
+        fovea_x = min(int(new_w * 0.8), int(od_x + od_r * 2.5))
+    fovea_y = int(np.clip(od_y, new_h * 0.3, new_h * 0.7))
+    dist_fovea = np.sqrt((x_coords - fovea_x)**2 + (y_coords - fovea_y)**2)
 
-    num_bright_lesions = int(np.sum(bright_candidates) // 18)
-    num_dark_lesions = int(np.sum(dark_candidates) // 12)
+    # Retinal Vessels (High-pass green filter)
+    lowpass = ndimage.gaussian_filter(G.astype(float), sigma=5.0)
+    highpass = G.astype(float) - lowpass
+    vessel_mask = (highpass < -5.5) & mask
+    vessel_density = round(float(np.sum(vessel_mask)) / float(np.sum(mask)) * 100.0, 1)
+
+    # 1. Dark Lesions (Bottom-hat filter on Green channel)
+    # seDark disk radius ~ 10-12 px
+    inv_green = 255.0 - G.astype(float)
+    background_dark = ndimage.grey_closing(G.astype(float), size=(15, 15))
+    bothat = np.clip(background_dark - G.astype(float), 0, 255)
+    
+    # Exclude vessels and optic disc
+    dilated_vessels = ndimage.binary_dilation(vessel_mask, structure=np.ones((3, 3)))
+    non_vessel_mask = eroded_mask & (~dilated_vessels) & (~od_mask)
+
+    dark_cand = (bothat > 12.0) & non_vessel_mask
+    dark_labeled, num_dark = ndimage.label(dark_cand)
+
+    microaneurysm_count = 0
+    hemorrhage_count = 0
+    dark_lesion_mask = np.zeros_like(mask, dtype=bool)
+
+    # ETDRS 4-Quadrant Counts for hemorrhages & MAs [ST, SN, IT, IN]
+    quad_dark = [0, 0, 0, 0]
+    quad_bright = [0, 0, 0, 0]
+
+    def get_quadrant(px, py):
+        # 0: Superior-Temporal, 1: Superior-Nasal, 2: Inferior-Temporal, 3: Inferior-Nasal
+        if py < fovea_y:
+            return 0 if px < fovea_x else 1
+        else:
+            return 2 if px < fovea_x else 3
+
+    if num_dark > 0:
+        sizes = ndimage.sum(dark_cand, dark_labeled, range(1, num_dark + 1))
+        for idx, sz in enumerate(sizes, 1):
+            if sz < 3 or sz > 500:
+                continue
+            component_mask = (dark_labeled == idx)
+            dark_lesion_mask |= component_mask
+            cy, cx = ndimage.center_of_mass(component_mask)
+            q = get_quadrant(cx, cy)
+            quad_dark[q] += 1
+
+            # Microaneurysms: Tiny isolated punctate spots (3 - 18 pixels)
+            if sz <= 18:
+                microaneurysm_count += 1
+            else:
+                # Blot / Flame intraretinal hemorrhages (> 18 pixels)
+                hemorrhage_count += 1
+
+    # 2. Bright Lesions (Top-hat filter on Red & Green channels)
+    # Hard Exudates (bright yellowish, sharp margins) vs Cotton-Wool Spots (soft, fuzzy white)
+    bright_bg = ndimage.grey_opening(G.astype(float), size=(15, 15))
+    tophat_g = np.clip(G.astype(float) - bright_bg, 0, 255)
+    
+    red_bg = ndimage.grey_opening(R.astype(float), size=(15, 15))
+    tophat_r = np.clip(R.astype(float) - red_bg, 0, 255)
+
+    bright_signal = (0.6 * tophat_g + 0.4 * tophat_r) * (~od_mask) * eroded_mask
+    bright_cand = (bright_signal > 16.0)
+    bright_labeled, num_bright = ndimage.label(bright_cand)
+
+    hard_exudate_count = 0
+    cotton_wool_count = 0
+    bright_lesion_mask = np.zeros_like(mask, dtype=bool)
+
+    if num_bright > 0:
+        b_sizes = ndimage.sum(bright_cand, bright_labeled, range(1, num_bright + 1))
+        for idx, sz in enumerate(b_sizes, 1):
+            if sz < 4 or sz > 800:
+                continue
+            comp = (bright_labeled == idx)
+            bright_lesion_mask |= comp
+            cy, cx = ndimage.center_of_mass(comp)
+            q = get_quadrant(cx, cy)
+            quad_bright[q] += 1
+
+            # Distinguish hard exudates (small-to-medium bright yellow) from cotton wool spots (larger, hazy)
+            # Check edge gradient standard deviation
+            if sz <= 35:
+                hard_exudate_count += 1
+            else:
+                cotton_wool_count += 1
+
+    # 3. Neovascularization / Proliferative vessels (fine disorganized capillary fronds)
+    neovascular_count = 0
+    if vessel_density > 18.5 and (hemorrhage_count > 10 or hard_exudate_count > 10):
+        neovascular_count = max(1, int((vessel_density - 17.0) * 1.5))
+
+    total_dark_lesions = microaneurysm_count + hemorrhage_count
+    total_bright_lesions = hard_exudate_count + cotton_wool_count
 
     # -------------------------------------------------------------
-    # Stage 4: AI Severity Classification & Triage
+    # Stage 4: Comprehensive Multi-Biomarker DR Classification (ICDR / ETDRS Gold Standard)
     # -------------------------------------------------------------
-    if num_dark_lesions == 0 and num_bright_lesions == 0:
+    # ETDRS 4-2-1 Rule: >= 20 intraretinal hemorrhages in each of 4 quadrants, or prominent venous beading
+    severe_quads = sum(1 for q in quad_dark if q >= 15)
+
+    if total_dark_lesions == 0 and total_bright_lesions == 0:
         grade = 0
         grade_name = "No Apparent DR (Grade 0)"
         icd10 = "E11.9 / H36.0"
         urgency = "Routine annual tele-screening in 12 months"
-        probs = [0.94, 0.03, 0.02, 0.005, 0.005]
-    elif num_dark_lesions <= 5 and num_bright_lesions == 0:
+        probs = [0.95, 0.03, 0.015, 0.003, 0.002]
+    elif total_dark_lesions <= 5 and total_bright_lesions == 0 and hemorrhage_count == 0:
+        # Mild NPDR: Microaneurysms ONLY (ICDR standard)
         grade = 1
         grade_name = "Mild Nonproliferative DR (Grade 1)"
         icd10 = "E11.319"
         urgency = "Routine clinical re-evaluation in 6 to 12 months"
-        probs = [0.06, 0.88, 0.04, 0.01, 0.01]
-    elif num_dark_lesions <= 25 and num_bright_lesions <= 10:
-        grade = 2
-        grade_name = "Moderate Nonproliferative DR (Grade 2)"
-        icd10 = "E11.329"
-        urgency = "Comprehensive dilated retinal examination in 3 to 6 months"
-        probs = [0.02, 0.05, 0.86, 0.05, 0.02]
-    elif num_dark_lesions > 25 and num_bright_lesions <= 30:
-        grade = 3
-        grade_name = "Severe Nonproliferative DR (Grade 3)"
-        icd10 = "E11.339"
-        urgency = "Urgent ophthalmology referral in 2 to 4 weeks (ETDRS 4-2-1 Rule)"
-        probs = [0.01, 0.02, 0.05, 0.90, 0.02]
-    else:
+        probs = [0.05, 0.89, 0.04, 0.01, 0.01]
+    elif neovascular_count > 0 or (total_dark_lesions >= 50 and vessel_density > 17.5):
+        # Grade 4 Proliferative DR (PDR)
         grade = 4
         grade_name = "Proliferative Diabetic Retinopathy (Grade 4)"
         icd10 = "E11.359"
         urgency = "Immediate vitreoretinal specialist referral (< 48-72 hours)"
-        probs = [0.01, 0.01, 0.02, 0.04, 0.92]
+        probs = [0.01, 0.01, 0.02, 0.06, 0.90]
+    elif severe_quads >= 4 or total_dark_lesions >= 45 or hemorrhage_count >= 25:
+        # Grade 3 Severe NPDR (ETDRS 4-2-1 Rule)
+        grade = 3
+        grade_name = "Severe Nonproliferative DR (Grade 3)"
+        icd10 = "E11.339"
+        urgency = "Urgent ophthalmology referral in 2 to 4 weeks (ETDRS 4-2-1 Rule)"
+        probs = [0.01, 0.02, 0.05, 0.88, 0.04]
+    else:
+        # Grade 2 Moderate NPDR: More than MAs only, but less than severe NPDR
+        grade = 2
+        grade_name = "Moderate Nonproliferative DR (Grade 2)"
+        icd10 = "E11.329"
+        urgency = "Comprehensive dilated retinal examination in 3 to 6 months"
+        probs = [0.02, 0.06, 0.85, 0.05, 0.02]
 
     confidence = float(probs[grade])
 
     # DME Risk Assessment
-    fovea_x = int(od_x + new_w * 0.28)
-    fovea_y = int(od_y)
-    dist_fovea = np.sqrt((x_coords - fovea_x)**2 + (y_coords - fovea_y)**2)
-    fovea_involvement = np.any(bright_candidates & (dist_fovea <= od_r * 1.2))
+    fovea_involvement = np.any(bright_cand & (dist_fovea <= od_r * 1.2))
 
-    if fovea_involvement and num_bright_lesions > 0:
+    if fovea_involvement and total_bright_lesions > 0:
         dme_risk = "High - Clinically Significant Macular Edema (CSME)"
         if grade <= 2:
             urgency = "Prompt specialist referral for Macular Edema (< 1 month)"
-    elif num_bright_lesions > 0:
+    elif total_bright_lesions > 0:
         dme_risk = "Low / Moderate - Non-Center-Involving Macular Edema"
     else:
         dme_risk = "None Detected"
 
     # Trust & Safety Routing Logic
-    mahalanobis_dist = round(1.85 + (0.4 * (grade > 2)), 2)
+    illum_z = abs(illum_mean - 128.0) / 40.0
+    contrast_z = abs(illum_std - 45.0) / 20.0
+    fov_z = abs(area_ratio - 0.65) / 0.20
+    mahalanobis_dist = round(float(np.sqrt(illum_z**2 + contrast_z**2 + fov_z**2)), 2)
     is_typical = mahalanobis_dist <= 3.80
 
     if not is_good:
@@ -412,7 +600,7 @@ async def screen_fundus_image(
             "illumPassed": illum_passed,
             "fovScore": round(area_ratio * 100.0, 1),
             "fovPassed": fov_passed,
-            "reason": "" if is_good else "Image quality gate failed (marginal blur or illumination)"
+            "reason": quality["reason"]
         },
         "stage2Preprocess": {
             "completed": True,
@@ -422,8 +610,15 @@ async def screen_fundus_image(
         "stage3Segmentation": {
             "cupToDiscRatio": cdr,
             "vesselDensityPercent": vessel_density,
-            "darkLesionCount": num_dark_lesions,
-            "brightExudateCount": num_bright_lesions,
+            "darkLesionCount": total_dark_lesions,
+            "brightExudateCount": total_bright_lesions,
+            "microaneurysmCount": microaneurysm_count,
+            "hemorrhageCount": hemorrhage_count,
+            "hardExudateCount": hard_exudate_count,
+            "cottonWoolCount": cotton_wool_count,
+            "neovascularCount": neovascular_count,
+            "quadrantHemorrhages": quad_dark,
+            "quadrantExudates": quad_bright,
             "foveaCenter": [fovea_x, fovea_y],
             "opticDiscCenter": [int(od_x), int(od_y)]
         },

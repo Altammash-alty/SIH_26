@@ -73,6 +73,12 @@ function [examData, isGood] = run_pipeline(imageInput, patientInfo, cfg, outputD
         error('run_pipeline:EmptyInput', 'Input fundus image is empty.');
     end
 
+    % Standardize to 768px working resolution (calibrated scale for all kernels & thresholds)
+    maxDim = max(size(rawImg, 1), size(rawImg, 2));
+    if maxDim > 768
+        rawImg = imresize(rawImg, 768 / maxDim);
+    end
+
     fprintf('==================================================================\n');
     fprintf('  RUNNING DIABETIC RETINOPATHY AUTONOMOUS SCREENING PIPELINE      \n');
     fprintf('==================================================================\n');

@@ -1,10 +1,5 @@
-import { useState, useEffect } from 'react';
-import { 
-  Upload, 
-  RefreshCw, 
-  ChevronRight,
-  Image as ImageIcon
-} from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Upload, RefreshCw, ChevronRight, Image as ImageIcon } from 'lucide-react';
 
 interface SampleItem {
   id: string;
@@ -13,6 +8,7 @@ interface SampleItem {
   groundTruthGrade: number;
   gradeLabel: string;
   path: string;
+  qualityTier?: 'high' | 'standard';
 }
 
 interface ScreeningResult {
@@ -42,6 +38,13 @@ interface ScreeningResult {
     vesselDensityPercent: number;
     darkLesionCount: number;
     brightExudateCount: number;
+    microaneurysmCount?: number;
+    hemorrhageCount?: number;
+    hardExudateCount?: number;
+    cottonWoolCount?: number;
+    neovascularCount?: number;
+    quadrantHemorrhages?: number[];
+    quadrantExudates?: number[];
     foveaCenter: [number, number];
     opticDiscCenter: [number, number];
   };
@@ -76,18 +79,17 @@ export const ScreeningStudio: React.FC = () => {
   const [result, setResult] = useState<ScreeningResult | null>(null);
   const [activeImageView, setActiveImageView] = useState<'raw' | 'enhanced' | 'heatmap'>('enhanced');
 
-  // Load sample dataset list on mount
   useEffect(() => {
     fetch('/api/samples')
-      .then(r => r.json())
-      .then(data => {
+      .then((r) => r.json())
+      .then((data) => {
         if (data.samples && data.samples.length > 0) {
           setSamples(data.samples);
           setSelectedSample(data.samples[0]);
           setPreviewUrl(data.samples[0].path);
         }
       })
-      .catch(err => console.error("Failed to fetch samples:", err));
+      .catch((err) => console.error('Failed to fetch samples:', err));
   }, []);
 
   const handleSelectSample = (sample: SampleItem) => {
@@ -97,49 +99,36 @@ export const ScreeningStudio: React.FC = () => {
     setResult(null);
   };
 
-  const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const f = e.dataTransfer.files[0];
-      setSelectedFile(f);
-      setSelectedSample(null);
-      setPreviewUrl(URL.createObjectURL(f));
-      setResult(null);
-    }
-  };
-
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const f = e.target.files[0];
-      setSelectedFile(f);
+      const file = e.target.files[0];
+      setSelectedFile(file);
       setSelectedSample(null);
-      setPreviewUrl(URL.createObjectURL(f));
+      setPreviewUrl(URL.createObjectURL(file));
       setResult(null);
     }
   };
 
   const handleExecuteScreening = async () => {
+    if (!selectedSample && !selectedFile) return;
+
     setLoading(true);
     try {
       const formData = new FormData();
       if (selectedFile) {
         formData.append('file', selectedFile);
       } else if (selectedSample) {
-        formData.append('sampleFilename', selectedSample.name);
-      } else {
-        alert("Please select or upload a fundus photograph.");
-        setLoading(false);
-        return;
+        formData.append('sampleId', selectedSample.id);
       }
 
-      formData.append('patientId', selectedSample ? `IDRiD-${selectedSample.name.replace('.jpg','')}` : 'PAT-2026-LIVE');
-      formData.append('patientAge', '59');
-      formData.append('patientGender', 'F');
+      formData.append('patientId', 'PAT-2026-STUDIO');
+      formData.append('patientAge', '58');
+      formData.append('patientGender', 'M');
       formData.append('eyeLaterality', 'OD (Right Eye)');
 
       const res = await fetch('/api/screen', {
         method: 'POST',
-        body: formData
+        body: formData,
       });
 
       if (!res.ok) {
@@ -148,467 +137,562 @@ export const ScreeningStudio: React.FC = () => {
 
       const data: ScreeningResult = await res.json();
       setResult(data);
-    } catch (err: any) {
-      console.error(err);
-      alert(`Screening execution error: ${err.message}`);
+      setActiveImageView('enhanced');
+    } catch (err) {
+      console.error('Error during screening:', err);
     } finally {
       setLoading(false);
     }
   };
 
-  const getRoutingColor = (dec: string) => {
-    switch (dec) {
-      case 'AUTO_CLEAR': return 'var(--emerald-400)';
-      case 'DOCTOR_REVIEW': return 'var(--amber-400)';
-      case 'OOD_FLAG': return 'var(--rose-400)';
-      case 'RETAKE': return 'var(--rose-400)';
-      default: return 'var(--cyan-400)';
-    }
-  };
+  const currentDisplayImage = result
+    ? activeImageView === 'raw'
+      ? result.images.raw
+      : activeImageView === 'enhanced'
+      ? result.images.enhanced
+      : result.images.heatmap
+    : previewUrl;
 
   return (
-    <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem' }}>
-      
-      {/* Studio Header */}
-      <div style={{ marginBottom: '2rem' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <span className="badge badge-info">DIAGNOSTIC WORKBENCH</span>
-          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            Real-Time 5-Stage Autonomous Screening
-          </span>
-        </div>
-        <h2 style={{ fontSize: '2.2rem', fontWeight: 800, letterSpacing: '-0.02em' }}>
-          Clinical Screening Studio
-        </h2>
-        <p style={{ color: 'var(--text-secondary)' }}>
-          Inspect fundus photographs across Quality Gate, CLAHE enhancement, segmentation, 5-class ICDR severity, and explainability heatmaps.
-        </p>
-      </div>
-
-      <div style={{
+    <div
+      style={{
         display: 'grid',
-        gridTemplateColumns: '380px 1fr',
-        gap: '2rem',
-        alignItems: 'start'
-      }}>
-        
-        {/* Left Column: Image Selection & Uploader */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          
-          {/* Dataset Sample Selector */}
-          <div className="glass-panel" style={{ padding: '1.5rem' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <ImageIcon size={18} color="var(--cyan-400)" />
-              1. Choose Real Dataset Sample
-            </h3>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '260px', overflowY: 'auto' }}>
-              {samples.map((s) => {
-                const isSelected = selectedSample?.id === s.id;
-                return (
-                  <div
-                    key={s.id}
-                    onClick={() => handleSelectSample(s)}
-                    style={{
-                      padding: '10px 12px',
-                      borderRadius: 'var(--radius-md)',
-                      background: isSelected ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.03)',
-                      border: isSelected ? '1px solid var(--cyan-400)' : '1px solid var(--border-subtle)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: '0.85rem', fontWeight: 700, color: isSelected ? 'var(--cyan-400)' : '#ffffff' }}>
-                        {s.name}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        {s.gradeLabel}
-                      </div>
-                    </div>
-                    <span className="badge" style={{
-                      fontSize: '0.65rem',
-                      background: 'rgba(255, 255, 255, 0.08)',
-                      borderColor: 'var(--border-subtle)'
-                    }}>
-                      G{s.groundTruthGrade}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+        gridTemplateColumns: '320px 1fr 340px',
+        backgroundColor: 'var(--paper)',
+        minHeight: '720px',
+      }}
+    >
+      {/* ----------------- LEFT PANEL: IMAGE SELECTION ----------------- */}
+      <div
+        style={{
+          backgroundColor: 'var(--surface-alt)',
+          borderRight: '1px solid var(--hairline)',
+          padding: '24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '20px',
+        }}
+      >
+        <div>
+          <div className="caption" style={{ marginBottom: '8px' }}>
+            Dataset Samples
           </div>
+          <p style={{ fontSize: '13px', color: 'var(--mid-gray)', marginBottom: '12px' }}>
+            Held-out validation images with ground truth labels.
+          </p>
 
-          {/* Drag and Drop Uploader */}
-          <div 
-            className="glass-panel"
+          <div
             style={{
-              padding: '1.75rem',
-              borderStyle: 'dashed',
-              borderWidth: '2px',
-              borderColor: selectedFile ? 'var(--cyan-400)' : 'rgba(255, 255, 255, 0.15)',
-              textAlign: 'center',
-              cursor: 'pointer'
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleFileDrop}
-          >
-            <input 
-              type="file" 
-              id="fundus-upload" 
-              accept="image/*" 
-              style={{ display: 'none' }}
-              onChange={handleFileChange}
-            />
-            <label htmlFor="fundus-upload" style={{ cursor: 'pointer', display: 'block' }}>
-              <div style={{
-                width: '48px',
-                height: '48px',
-                borderRadius: '50%',
-                background: 'rgba(56, 189, 248, 0.1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                margin: '0 auto 12px'
-              }}>
-                <Upload size={22} color="var(--cyan-400)" />
-              </div>
-              <h4 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '4px' }}>
-                Or Upload Fundus Photograph
-              </h4>
-              <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '8px' }}>
-                Drag & drop .jpg, .png, .tif (IDRiD / Messidor-2 supported)
-              </p>
-              {selectedFile && (
-                <div style={{ fontSize: '0.8rem', color: 'var(--emerald-400)', fontWeight: 600 }}>
-                  Selected: {selectedFile.name}
-                </div>
-              )}
-            </label>
-          </div>
-
-          {/* Action Trigger Button */}
-          <button
-            onClick={handleExecuteScreening}
-            disabled={loading || (!selectedSample && !selectedFile)}
-            style={{
-              background: 'linear-gradient(135deg, var(--cyan-500), #2563eb)',
-              color: '#ffffff',
-              border: 'none',
-              padding: '16px',
-              borderRadius: 'var(--radius-md)',
-              fontSize: '1rem',
-              fontWeight: 700,
-              cursor: loading ? 'not-allowed' : 'pointer',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '10px',
-              boxShadow: '0 8px 25px rgba(14, 165, 233, 0.35)',
-              opacity: loading ? 0.7 : 1,
-              transition: 'transform 0.15s ease'
+              flexDirection: 'column',
+              gap: '6px',
+              maxHeight: '260px',
+              overflowY: 'auto',
+              paddingRight: '4px',
             }}
           >
-            {loading ? (
-              <>
-                <RefreshCw size={18} className="pulse-glow" />
-                Executing Pipeline Stages...
-              </>
-            ) : (
-              <>
-                Run 5-Stage Autonomous Screening
-                <ChevronRight size={18} />
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Right Column: Visual Inspection & Diagnostic Results */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          
-          {/* Main Visual Display Card */}
-          <div className="glass-panel" style={{ padding: '1.5rem', position: 'relative' }}>
-            
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-              <div>
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 700 }}>
-                  Retinal Fundus Optical Viewer
-                </h3>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  {result ? `Patient ID: ${result.patient.id} | Eye: ${result.patient.eye}` : 'Awaiting diagnostic execution'}
-                </span>
-              </div>
-
-              {/* View Switcher Tabs */}
-              {result && (
-                <div style={{
-                  display: 'flex',
-                  gap: '4px',
-                  background: 'rgba(0, 0, 0, 0.4)',
-                  padding: '4px',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--border-subtle)'
-                }}>
-                  <button
-                    onClick={() => setActiveImageView('raw')}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      background: activeImageView === 'raw' ? 'var(--bg-surface-hover)' : 'transparent',
-                      color: activeImageView === 'raw' ? 'var(--cyan-400)' : 'var(--text-secondary)',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Raw Input
-                  </button>
-
-                  <button
-                    onClick={() => setActiveImageView('enhanced')}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      background: activeImageView === 'enhanced' ? 'var(--bg-surface-hover)' : 'transparent',
-                      color: activeImageView === 'enhanced' ? 'var(--cyan-400)' : 'var(--text-secondary)',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Stage 2 CLAHE
-                  </button>
-
-                  <button
-                    onClick={() => setActiveImageView('heatmap')}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: '6px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      background: activeImageView === 'heatmap' ? 'var(--bg-surface-hover)' : 'transparent',
-                      color: activeImageView === 'heatmap' ? 'var(--cyan-400)' : 'var(--text-secondary)',
-                      border: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Stage 5 Heatmap
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Viewport Area */}
-            <div style={{
-              width: '100%',
-              height: '460px',
-              borderRadius: 'var(--radius-md)',
-              background: '#040711',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              overflow: 'hidden',
-              position: 'relative',
-              border: '1px solid var(--border-subtle)'
-            }}>
-              {previewUrl ? (
-                <img 
-                  src={
-                    result 
-                      ? (activeImageView === 'raw' ? result.images.raw : (activeImageView === 'enhanced' ? result.images.enhanced : result.images.heatmap))
-                      : previewUrl
-                  } 
-                  alt="Fundus photograph" 
-                  style={{ maxHeight: '100%', maxWidth: '100%', objectFit: 'contain' }}
-                />
-              ) : (
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                  No fundus image selected
-                </div>
-              )}
-
-              {/* Live Overlay Badges */}
-              {result && (
-                <div style={{
-                  position: 'absolute',
-                  top: '16px',
-                  left: '16px',
-                  display: 'flex',
-                  gap: '8px'
-                }}>
-                  <span className={`badge ${result.stage1Quality.isGood ? 'badge-pass' : 'badge-danger'}`}>
-                    Quality: {result.stage1Quality.overallScore}/100
-                  </span>
-                  <span className="badge badge-info">
-                    CDR: {result.stage3Segmentation.cupToDiscRatio}
-                  </span>
-                  <span className="badge badge-info">
-                    Vessels: {result.stage3Segmentation.vesselDensityPercent}%
-                  </span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {result && result.routing.decision === 'RETAKE' && (
-            <div className="glass-panel" style={{
-              padding: '1rem 1.25rem',
-              borderColor: 'rgba(248, 113, 113, 0.6)',
-              background: 'rgba(127, 29, 29, 0.22)',
-              boxShadow: '0 0 0 1px rgba(248, 113, 113, 0.08)'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-                <div>
-                  <div style={{ fontSize: '0.72rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--rose-400)', fontWeight: 800 }}>
-                    Retake Required
-                  </div>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px' }}>
-                    Please upload a new fundus image with better focus, illumination, and field-of-view.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => { setResult(null); setPreviewUrl(selectedFile ? URL.createObjectURL(selectedFile) : (selectedSample ? selectedSample.path : null)); }}
+            {samples.map((s) => {
+              const isSelected = selectedSample?.id === s.id;
+              return (
+                <div
+                  key={s.id}
+                  onClick={() => handleSelectSample(s)}
                   style={{
-                    background: 'rgba(248, 113, 113, 0.12)',
-                    color: 'var(--rose-400)',
-                    border: '1px solid rgba(248, 113, 113, 0.35)',
-                    borderRadius: '10px',
-                    padding: '10px 14px',
-                    fontWeight: 700,
-                    cursor: 'pointer'
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-nested)',
+                    backgroundColor: isSelected ? 'rgba(15, 118, 110, 0.08)' : 'var(--paper)',
+                    border: isSelected ? '1.5px solid var(--teal)' : '1px solid var(--hairline)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    transition: 'all 150ms ease',
                   }}
                 >
-                  Re-upload Image
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Diagnostic Findings Grid */}
-          {result && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1.25rem' }}>
-              
-              {/* Card 1: Stage 4 AI Diagnosis & DME */}
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <span className="badge badge-info" style={{ marginBottom: '8px' }}>
-                  STAGE 4 AI CLASSIFICATION
-                </span>
-                <div style={{ fontSize: '1.4rem', fontWeight: 800, marginTop: '4px' }}>
-                  {result.stage4Grading.gradeName}
-                </div>
-                <div style={{ fontSize: '0.85rem', color: 'var(--cyan-400)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
-                  ICD-10: {result.stage4Grading.icd10Code} | Confidence: {(result.stage4Grading.confidence * 100).toFixed(1)}%
-                </div>
-
-                <div style={{ marginTop: '1.25rem', padding: '12px', borderRadius: 'var(--radius-sm)', background: 'rgba(0,0,0,0.3)' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Diabetic Macular Edema (DME) Risk
-                  </div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 700, color: result.stage4Grading.dmeRisk.includes('High') ? 'var(--rose-400)' : 'var(--emerald-400)', marginTop: '2px' }}>
-                    {result.stage4Grading.dmeRisk}
-                  </div>
-                </div>
-
-                <div style={{ marginTop: '1rem' }}>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
-                    Clinical Referral Timeline
-                  </div>
-                  <div style={{ fontSize: '0.9rem', color: 'var(--text-primary)', marginTop: '2px' }}>
-                    {result.stage4Grading.urgency}
-                  </div>
-                </div>
-              </div>
-
-              {/* Card 2: Trust & Routing Decision */}
-              <div className="glass-panel" style={{ padding: '1.5rem' }}>
-                <span className="badge" style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  color: getRoutingColor(result.routing.decision),
-                  marginBottom: '8px'
-                }}>
-                  TRUST & ROUTING LAYER
-                </span>
-
-                <div style={{ 
-                  fontSize: '1.4rem', 
-                  fontWeight: 800, 
-                  color: getRoutingColor(result.routing.decision),
-                  marginTop: '4px' 
-                }}>
-                  [{result.routing.decision}]
-                </div>
-
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: 1.5 }}>
-                  {result.routing.reason}
-                </p>
-
-                <div style={{ marginTop: '1.25rem', display: 'flex', gap: '16px' }}>
                   <div>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Mahalanobis OOD Dist:</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, fontFamily: 'var(--font-mono)' }}>
-                      {result.routing.mahalanobisDistance} (Cutoff: 3.80)
+                    <div
+                      style={{
+                        fontSize: '13px',
+                        fontWeight: 500,
+                        color: isSelected ? 'var(--teal)' : 'var(--ink)',
+                      }}
+                    >
+                      {s.name}
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--mid-gray)' }}>
+                      {s.gradeLabel}
                     </div>
                   </div>
-                  <div>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Distribution Status:</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, color: result.routing.isTypical ? 'var(--emerald-400)' : 'var(--rose-400)' }}>
-                      {result.routing.isTypical ? 'Within Manifold' : 'Atypical OOD'}
-                    </div>
-                  </div>
+                  <span className={s.groundTruthGrade >= 2 ? 'badge-amber' : 'badge-teal'}>
+                    Grade {s.groundTruthGrade}
+                  </span>
                 </div>
-              </div>
-
-              {/* Card 3: Quantitative Lesions Breakdown */}
-              <div className="glass-panel" style={{ padding: '1.25rem' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
-                  STAGE 3 BIOMARKERS
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', marginTop: '10px' }}>
-                  <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Dark Hemorrhages / MAs</span>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{result.stage3Segmentation.darkLesionCount}</div>
-                  </div>
-                  <div style={{ background: 'rgba(0,0,0,0.3)', padding: '10px', borderRadius: '8px' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Bright Exudates</span>
-                    <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{result.stage3Segmentation.brightExudateCount}</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Card 4: Quality Gate Details */}
-              <div className="glass-panel" style={{ padding: '1.25rem' }}>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>
-                  STAGE 1 QUALITY BREAKDOWN
-                </span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginTop: '10px' }}>
-                  <div style={{ background: 'rgba(0,0,0,0.3)', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Sharpness</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700 }}>{result.stage1Quality.blurScore}</div>
-                  </div>
-                  <div style={{ background: 'rgba(0,0,0,0.3)', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Illumination</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700 }}>{result.stage1Quality.illumScore}</div>
-                  </div>
-                  <div style={{ background: 'rgba(0,0,0,0.3)', padding: '8px', borderRadius: '8px', textAlign: 'center' }}>
-                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>FOV Area</span>
-                    <div style={{ fontSize: '1rem', fontWeight: 700 }}>{result.stage1Quality.fovScore}%</div>
-                  </div>
-                </div>
-              </div>
-
-            </div>
-          )}
-
+              );
+            })}
+          </div>
         </div>
 
+        {/* Upload Custom Photograph */}
+        <div
+          style={{
+            border: '1.5px dashed var(--hairline)',
+            borderRadius: 'var(--radius-nested)',
+            padding: '20px 16px',
+            textAlign: 'center',
+            backgroundColor: 'var(--paper)',
+          }}
+        >
+          <input
+            type="file"
+            id="fundus-upload"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={handleFileChange}
+          />
+          <label htmlFor="fundus-upload" style={{ cursor: 'pointer', display: 'block' }}>
+            <Upload size={20} color="var(--mid-gray)" style={{ margin: '0 auto 8px' }} />
+            <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--ink)', marginBottom: '4px' }}>
+              Upload a fundus photograph
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--mid-gray)' }}>
+              .jpg .png .tif (IDRiD / Messidor-2 format)
+            </div>
+            {selectedFile && (
+              <div
+                style={{
+                  marginTop: '8px',
+                  fontSize: '11px',
+                  color: 'var(--teal)',
+                  fontFamily: 'var(--font-mono)',
+                  fontWeight: 500,
+                }}
+              >
+                Selected: {selectedFile.name}
+              </div>
+            )}
+          </label>
+        </div>
+
+        {/* Primary Run Button */}
+        <button
+          type="button"
+          onClick={handleExecuteScreening}
+          disabled={loading || (!selectedSample && !selectedFile)}
+          className="btn-primary"
+          style={{
+            width: '100%',
+            padding: '12px',
+            fontSize: '14px',
+            marginTop: 'auto',
+            opacity: loading || (!selectedSample && !selectedFile) ? 0.6 : 1,
+            cursor: loading || (!selectedSample && !selectedFile) ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {loading ? (
+            <>
+              <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} />
+              Running pipeline...
+            </>
+          ) : (
+            <>
+              Run screening
+              <ChevronRight size={16} />
+            </>
+          )}
+        </button>
       </div>
 
+      {/* ----------------- CENTER PANEL: IMAGE VIEWER ----------------- */}
+      <div
+        style={{
+          padding: '24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          backgroundColor: 'var(--canvas)',
+        }}
+      >
+        {/* Tab Switcher Header */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+          }}
+        >
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              type="button"
+              onClick={() => setActiveImageView('raw')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 500,
+                borderRadius: 'var(--radius-input)',
+                border: activeImageView === 'raw' ? '1px solid var(--ink)' : '1px solid var(--hairline)',
+                backgroundColor: activeImageView === 'raw' ? 'var(--ink)' : 'var(--paper)',
+                color: activeImageView === 'raw' ? 'var(--paper)' : 'var(--mid-gray)',
+                cursor: 'pointer',
+              }}
+            >
+              Raw input
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveImageView('enhanced')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 500,
+                borderRadius: 'var(--radius-input)',
+                border: activeImageView === 'enhanced' ? '1px solid var(--ink)' : '1px solid var(--hairline)',
+                backgroundColor: activeImageView === 'enhanced' ? 'var(--ink)' : 'var(--paper)',
+                color: activeImageView === 'enhanced' ? 'var(--paper)' : 'var(--mid-gray)',
+                cursor: 'pointer',
+              }}
+            >
+              CLAHE enhanced
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveImageView('heatmap')}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 500,
+                borderRadius: 'var(--radius-input)',
+                border: activeImageView === 'heatmap' ? '1px solid var(--ink)' : '1px solid var(--hairline)',
+                backgroundColor: activeImageView === 'heatmap' ? 'var(--ink)' : 'var(--paper)',
+                color: activeImageView === 'heatmap' ? 'var(--paper)' : 'var(--mid-gray)',
+                cursor: 'pointer',
+              }}
+            >
+              Saliency map
+            </button>
+          </div>
+
+          {result && (
+            <span className="badge-teal">
+              Quality Gate Passed ({result.stage1Quality.overallScore}/100)
+            </span>
+          )}
+        </div>
+
+        {/* Viewport Display Area */}
+        <div
+          style={{
+            flex: 1,
+            backgroundColor: '#0a0a0a',
+            borderRadius: 'var(--radius-nested)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+            position: 'relative',
+            minHeight: '440px',
+          }}
+        >
+          {currentDisplayImage ? (
+            <img
+              src={currentDisplayImage}
+              alt="Fundus view"
+              style={{
+                maxWidth: '100%',
+                maxHeight: '100%',
+                objectFit: 'contain',
+                display: 'block',
+              }}
+            />
+          ) : (
+            <div style={{ textAlign: 'center', color: '#737373', fontSize: '13px' }}>
+              <ImageIcon size={32} style={{ margin: '0 auto 12px', opacity: 0.5 }} />
+              <div>Select or upload an image to begin.</div>
+            </div>
+          )}
+
+          {activeImageView === 'heatmap' && result && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '12px',
+                left: '12px',
+                backgroundColor: 'rgba(10, 10, 10, 0.85)',
+                border: '1px solid rgba(229, 229, 229, 0.2)',
+                borderRadius: 'var(--radius-badge)',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                color: '#ffffff',
+              }}
+            >
+              Grad-CAM lesion evidence overlay
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ----------------- RIGHT PANEL: DIAGNOSTIC RESULTS ----------------- */}
+      <div
+        style={{
+          borderLeft: '1px solid var(--hairline)',
+          backgroundColor: 'var(--surface-alt)',
+          padding: '24px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          overflowY: 'auto',
+        }}
+      >
+        <div className="caption">Diagnostic Results</div>
+
+        {!result ? (
+          <div
+            style={{
+              padding: '32px 16px',
+              textAlign: 'center',
+              color: 'var(--mid-gray)',
+              fontSize: '13px',
+              backgroundColor: 'var(--paper)',
+              borderRadius: 'var(--radius-nested)',
+              border: '1px solid var(--hairline)',
+            }}
+          >
+            Run screening to generate Stage 1–5 findings.
+          </div>
+        ) : (
+          <>
+            {/* Stage 1: Quality Gate */}
+            <div
+              style={{
+                backgroundColor: 'var(--paper)',
+                border: '1px solid var(--hairline)',
+                borderRadius: 'var(--radius-nested)',
+                padding: '16px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                  marginBottom: '10px',
+                }}
+              >
+                <span className="caption">Stage 1 · Quality Gate</span>
+                <span
+                  style={{
+                    fontSize: '16px',
+                    fontWeight: 600,
+                    color: result.stage1Quality.isGood ? 'var(--teal)' : 'var(--amber)',
+                  }}
+                >
+                  {result.stage1Quality.overallScore} / 100
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--mid-gray)' }}>Sharpness (Laplacian var)</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {result.stage1Quality.blurScore} {result.stage1Quality.blurPassed ? '✓' : '✗'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--mid-gray)' }}>Illumination Mean</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {result.stage1Quality.illumScore} {result.stage1Quality.illumPassed ? '✓' : '✗'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: 'var(--mid-gray)' }}>Field of View (FOV)</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {result.stage1Quality.fovScore}% {result.stage1Quality.fovPassed ? '✓' : '✗'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Stage 3: Lesion Biomarkers Breakdown */}
+            <div
+              style={{
+                backgroundColor: 'var(--paper)',
+                border: '1px solid var(--hairline)',
+                borderRadius: 'var(--radius-nested)',
+                padding: '16px',
+              }}
+            >
+              <div className="caption" style={{ marginBottom: '10px' }}>
+                Stage 3 · Quantitative Lesion Phenotyping
+              </div>
+
+              {/* Granular Biomarker 4-Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+                <div
+                  style={{
+                    backgroundColor: 'var(--surface-alt)',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--hairline)',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', color: 'var(--mid-gray)' }}>Microaneurysms (MAs)</div>
+                  <div style={{ fontSize: '17px', fontWeight: 600, color: 'var(--ink)' }}>
+                    {result.stage3Segmentation.microaneurysmCount ?? 0}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    backgroundColor: 'var(--surface-alt)',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--hairline)',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', color: 'var(--mid-gray)' }}>Hemorrhages (Blot/Flame)</div>
+                  <div style={{ fontSize: '17px', fontWeight: 600, color: '#dc2626' }}>
+                    {result.stage3Segmentation.hemorrhageCount ?? result.stage3Segmentation.darkLesionCount}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    backgroundColor: 'var(--surface-alt)',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--hairline)',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', color: 'var(--mid-gray)' }}>Hard Exudates</div>
+                  <div style={{ fontSize: '17px', fontWeight: 600, color: 'var(--amber)' }}>
+                    {result.stage3Segmentation.hardExudateCount ?? result.stage3Segmentation.brightExudateCount}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    backgroundColor: 'var(--surface-alt)',
+                    padding: '8px 10px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--hairline)',
+                  }}
+                >
+                  <div style={{ fontSize: '11px', color: 'var(--mid-gray)' }}>Cotton-Wool Spots</div>
+                  <div style={{ fontSize: '17px', fontWeight: 600, color: 'var(--ink)' }}>
+                    {result.stage3Segmentation.cottonWoolCount ?? 0}
+                  </div>
+                </div>
+              </div>
+
+              {/* Neovascularization flag if present */}
+              {(result.stage3Segmentation.neovascularCount ?? 0) > 0 && (
+                <div
+                  style={{
+                    backgroundColor: 'rgba(220, 38, 38, 0.08)',
+                    border: '1px solid rgba(220, 38, 38, 0.3)',
+                    borderRadius: '4px',
+                    padding: '6px 8px',
+                    marginBottom: '10px',
+                    fontSize: '11px',
+                    color: '#dc2626',
+                    fontWeight: 500,
+                  }}
+                >
+                  ⚠ Proliferative Neovascular Fronds: {result.stage3Segmentation.neovascularCount} detected
+                </div>
+              )}
+
+              {/* 4-Quadrant ETDRS Distribution */}
+              {result.stage3Segmentation.quadrantHemorrhages && (
+                <div style={{ marginBottom: '10px', padding: '8px', backgroundColor: 'var(--surface-alt)', borderRadius: '6px' }}>
+                  <div style={{ fontSize: '11px', color: 'var(--mid-gray)', marginBottom: '4px' }}>
+                    ETDRS 4-Quadrant Hemorrhages [ST, SN, IT, IN]:
+                  </div>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 600, color: 'var(--ink)' }}>
+                    [{result.stage3Segmentation.quadrantHemorrhages.join(', ')}]
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Vessel Density</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>
+                  {result.stage3Segmentation.vesselDensityPercent}%
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginTop: '4px' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>Cup-to-Disc Ratio (CDR)</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>
+                  {result.stage3Segmentation.cupToDiscRatio}
+                </span>
+              </div>
+            </div>
+
+            {/* Stage 4: DR Grade */}
+            <div
+              style={{
+                backgroundColor: 'var(--paper)',
+                border: '1px solid var(--hairline)',
+                borderRadius: 'var(--radius-nested)',
+                padding: '16px',
+              }}
+            >
+              <div className="caption" style={{ marginBottom: '6px' }}>
+                Stage 4 · DR Grade
+              </div>
+              <div style={{ fontSize: '16px', fontWeight: 600, color: 'var(--ink)', marginBottom: '4px' }}>
+                {result.stage4Grading.gradeName}
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--mid-gray)', marginBottom: '10px' }}>
+                ICD-10: <span style={{ fontFamily: 'var(--font-mono)' }}>{result.stage4Grading.icd10Code}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '8px' }}>
+                <span style={{ color: 'var(--mid-gray)' }}>AI Confidence</span>
+                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--teal)' }}>
+                  {(result.stage4Grading.confidence * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div
+                style={{
+                  fontSize: '11px',
+                  color: 'var(--ink-soft)',
+                  backgroundColor: 'var(--surface-alt)',
+                  padding: '6px 8px',
+                  borderRadius: '4px',
+                }}
+              >
+                {result.stage4Grading.urgency}
+              </div>
+            </div>
+
+            {/* Stage 5: Routing Decision */}
+            <div
+              style={{
+                backgroundColor: 'var(--paper)',
+                border: '1px solid var(--hairline)',
+                borderRadius: 'var(--radius-nested)',
+                padding: '16px',
+              }}
+            >
+              <div className="caption" style={{ marginBottom: '8px' }}>
+                Stage 5 · Routing Decision
+              </div>
+              <div style={{ marginBottom: '6px' }}>
+                <span
+                  className={
+                    result.routing.decision === 'AUTO_CLEAR'
+                      ? 'badge-teal'
+                      : result.routing.decision === 'DOCTOR_REVIEW'
+                      ? 'badge-amber'
+                      : 'badge-neutral'
+                  }
+                >
+                  {result.routing.decision.replace('_', ' ')}
+                </span>
+              </div>
+              <p style={{ fontSize: '12px', color: 'var(--mid-gray)', lineHeight: 1.4 }}>
+                {result.routing.reason}
+              </p>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 };

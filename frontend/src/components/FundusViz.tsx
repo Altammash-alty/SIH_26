@@ -2,9 +2,10 @@
 
 interface FundusVizProps {
   showGradcam?: boolean;
+  clean?: boolean;
 }
 
-export function FundusViz({ showGradcam = false }: FundusVizProps) {
+export function FundusViz({ showGradcam = false, clean = false }: FundusVizProps) {
   return (
     <svg viewBox="0 0 400 400" width="100%" height="100%">
       <defs>
@@ -120,34 +121,14 @@ export function FundusViz({ showGradcam = false }: FundusVizProps) {
         <circle cx="260" cy="210" r="2.5" fill="#FCD34D" fillOpacity="0.7"/>
       </g>
 
-      {/* Clinical annotation lines & labels */}
-      {/* Optic Disc label */}
-      <line x1="128" y1="166" x2="82" y2="140" stroke="#64748B" strokeWidth="0.8" strokeDasharray="3,2"/>
-      <text x="78" y="137" fontSize="9" fill="#475569" fontFamily="Inter,sans-serif" fontWeight="600" textAnchor="middle">Optic Disc</text>
-
-      {/* Fovea label */}
-      <line x1="262" y1="178" x2="262" y2="150" stroke="#64748B" strokeWidth="0.8" strokeDasharray="3,2"/>
-      <text x="262" y="146" fontSize="9" fill="#475569" fontFamily="Inter,sans-serif" fontWeight="600" textAnchor="middle">Fovea</text>
-
-      {/* Microaneurysm label */}
-      <line x1="230" y1="183" x2="218" y2="165" stroke="#DC2626" strokeWidth="0.8" strokeDasharray="2,2"/>
-      <rect x="175" y="154" width="70" height="13" rx="3" fill="white" fillOpacity="0.9" stroke="#FCA5A5" strokeWidth="0.8"/>
-      <text x="210" y="163.5" fontSize="8.5" fill="#DC2626" fontFamily="Inter,sans-serif" fontWeight="600" textAnchor="middle">Microaneurysm</text>
-
-      {/* Exudate label */}
-      <line x1="248" y1="221" x2="330" y2="240" stroke="#D97706" strokeWidth="0.8" strokeDasharray="2,2"/>
-      <rect x="320" y="234" width="54" height="13" rx="3" fill="white" fillOpacity="0.9" stroke="#FDE68A" strokeWidth="0.8"/>
-      <text x="347" y="243.5" fontSize="8.5" fill="#D97706" fontFamily="Inter,sans-serif" fontWeight="600" textAnchor="middle">Exudate</text>
-
-      {/* Hemorrhage label */}
-      <line x1="290" y1="192" x2="348" y2="178" stroke="#7F1D1D" strokeWidth="0.8" strokeDasharray="2,2"/>
-      <rect x="335" y="170" width="60" height="13" rx="3" fill="white" fillOpacity="0.9" stroke="#FCA5A5" strokeWidth="0.8"/>
-      <text x="365" y="179.5" fontSize="8.5" fill="#991B1B" fontFamily="Inter,sans-serif" fontWeight="600" textAnchor="middle">Hemorrhage</text>
-
-      {/* Vessel Map label */}
-      <line x1="195" y1="155" x2="175" y2="128" stroke="#0F766E" strokeWidth="0.8" strokeDasharray="2,2"/>
-      <rect x="128" y="120" width="60" height="13" rx="3" fill="white" fillOpacity="0.9" stroke="#99F6E4" strokeWidth="0.8"/>
-      <text x="158" y="129.5" fontSize="8.5" fill="#0F766E" fontFamily="Inter,sans-serif" fontWeight="600" textAnchor="middle">Vessel Map</text>
+      {!clean && (
+        <>
+          <line x1="128" y1="166" x2="82" y2="140" stroke="#64748B" strokeWidth="0.8" strokeDasharray="3,2"/>
+          <text x="78" y="137" fontSize="9" fill="#a7aec1" fontFamily="IBM Plex Sans,sans-serif" fontWeight="600" textAnchor="middle">Optic Disc</text>
+          <line x1="262" y1="178" x2="262" y2="150" stroke="#64748B" strokeWidth="0.8" strokeDasharray="3,2"/>
+          <text x="262" y="146" fontSize="9" fill="#a7aec1" fontFamily="IBM Plex Sans,sans-serif" fontWeight="600" textAnchor="middle">Fovea</text>
+        </>
+      )}
     </svg>
   );
 }
