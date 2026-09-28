@@ -109,13 +109,26 @@ function cfg = config()
     cfg.segment.macula.maculaHazardRadiusRatio = 1.0;  % 1-disc-diameter hazard zone for clinically significant DME
 
     % 4. Lesion Candidate Detection (Dark & Bright Lesions)
+    % Parameters below are LOCKED from bayesopt calibration (run_bayesopt_calibration.m).
+    % Winner: Candidate 4, SELECTION Loss=0.5568, Sens=92.2%, Spec=5.3%
+    % Calibrated against IDRiD ground-truth (Parts 1, 2, & 5). Seed=2026.
+    % Calibration date: 28-Sep-2026.
     cfg.segment.lesion = struct();
-    cfg.segment.lesion.darkMinSize = 4;                % Min microaneurysm size in pixels
-    cfg.segment.lesion.darkMaxSize = 400;              % Max hemorrhage cluster size in pixels
-    cfg.segment.lesion.darkSensitivity = 0.04;         % Bottom-hat intensity contrast threshold
-    cfg.segment.lesion.brightMinSize = 4;              % Min hard exudate size in pixels
-    cfg.segment.lesion.brightMaxSize = 600;            % Max exudate / cotton wool spot size in pixels
-    cfg.segment.lesion.brightSensitivity = 0.06;       % Top-hat intensity contrast threshold
+    cfg.segment.lesion.darkMinSize = 3;                % Min microaneurysm cluster size in pixels
+    cfg.segment.lesion.darkMaxSize = 4528;             % Max hemorrhage cluster size in pixels [bayesopt]
+    cfg.segment.lesion.darkSensitivity = 4.037;        % Std devs above bottom-hat background [bayesopt]
+    cfg.segment.lesion.darkLocalMinContrast = 0.148;   % Min contrast vs local surround [bayesopt]
+    cfg.segment.lesion.brightMinSize = 3;              % Min hard exudate cluster size in pixels
+    cfg.segment.lesion.brightMaxSize = 3444;           % Max exudate cluster size in pixels [bayesopt]
+    cfg.segment.lesion.brightSensitivity = 4.865;      % Std devs above top-hat background [bayesopt]
+    cfg.segment.lesion.brightLocalMinContrast = 0.148; % Min contrast vs local surround [bayesopt]
+    cfg.segment.lesion.marginFactor = 1.114;           % Adaptive threshold confidence multiplier [bayesopt]
+    cfg.segment.lesion.vesselBufferRadius = 4;         % Dilation radius (pixels) for vascular exclusion [bayesopt]
+    cfg.segment.lesion.solidityCutoff = 0.816;         % Min regionprops Solidity for dark lesion shape filter [bayesopt]
+
+    % Debug flag: set true to print per-lesion diagnostic output from segmentLesions.m
+    cfg.debug = false;
+
 
     %% --------------------------------------------------------------------
     %  STAGE 4: DR SEVERITY CLASSIFICATION CONFIGURATION
@@ -139,6 +152,14 @@ function cfg = config()
     cfg.classify.severeHemorrhagePerQuad = 20;   % 4-2-1 rule: 20+ intraretinal hemorrhages in each of 4 quadrants
     cfg.classify.pdrNeovascularAreaRatio = 0.005;% Neovascularization area threshold for PDR
     cfg.classify.dmeNearDistancePx = 50.0;       % Exudate distance to fovea for Clinically Significant DME
+
+    % Grade 0 noise ceiling: images where darkCount <= this threshold AND
+    % brightCount <= this threshold are treated as Grade 0 (no DR), because
+    % at the calibrated sensitivity level the lesion detector produces up to
+    % this many false-positive clusters on genuinely normal retinas.
+    % Derived empirically: bayesopt winner yields avgDarkG0=8.1, avgBrightG0=6.8
+    % on SELECTION split; ceiling set at mean + 1 std (rounded up).
+    cfg.classify.grade0NoiseCeiling = 12;        % Max combined lesion count to still call Grade 0 [calibrated]
 
     %% --------------------------------------------------------------------
     %  STAGE 5: EXPLAINABILITY & REPORTING CONFIGURATION

@@ -67,6 +67,7 @@ interface ScreeningResult {
     raw: string;
     enhanced: string;
     heatmap: string;
+    lesionOverlay?: string;
   };
 }
 
@@ -77,7 +78,7 @@ export const ScreeningStudio: React.FC = () => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<ScreeningResult | null>(null);
-  const [activeImageView, setActiveImageView] = useState<'raw' | 'enhanced' | 'heatmap'>('enhanced');
+  const [activeImageView, setActiveImageView] = useState<'raw' | 'enhanced' | 'heatmap' | 'lesion'>('enhanced');
 
   useEffect(() => {
     fetch('/api/samples')
@@ -118,7 +119,11 @@ export const ScreeningStudio: React.FC = () => {
       if (selectedFile) {
         formData.append('file', selectedFile);
       } else if (selectedSample) {
-        formData.append('sampleId', selectedSample.id);
+        // Backend expects sampleFilename (the bare filename, e.g. IDRiD_001.jpg)
+        const fname = selectedSample.name.endsWith('.jpg')
+          ? selectedSample.name
+          : selectedSample.name + '.jpg';
+        formData.append('sampleFilename', fname);
       }
 
       formData.append('patientId', 'PAT-2026-STUDIO');
@@ -150,6 +155,8 @@ export const ScreeningStudio: React.FC = () => {
       ? result.images.raw
       : activeImageView === 'enhanced'
       ? result.images.enhanced
+      : activeImageView === 'lesion'
+      ? (result.images.lesionOverlay ?? result.images.heatmap)
       : result.images.heatmap
     : previewUrl;
 
@@ -369,6 +376,24 @@ export const ScreeningStudio: React.FC = () => {
             >
               Saliency map
             </button>
+            {result?.images.lesionOverlay && (
+              <button
+                type="button"
+                onClick={() => setActiveImageView('lesion')}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  borderRadius: 'var(--radius-input)',
+                  border: activeImageView === 'lesion' ? '1px solid #ef4444' : '1px solid var(--hairline)',
+                  backgroundColor: activeImageView === 'lesion' ? '#ef4444' : 'var(--paper)',
+                  color: activeImageView === 'lesion' ? '#fff' : 'var(--mid-gray)',
+                  cursor: 'pointer',
+                }}
+              >
+                Lesion map
+              </button>
+            )}
           </div>
 
           {result && (
@@ -410,6 +435,27 @@ export const ScreeningStudio: React.FC = () => {
             </div>
           )}
 
+          {activeImageView === 'lesion' && result && (
+            <div
+              style={{
+                position: 'absolute',
+                bottom: '12px',
+                left: '12px',
+                backgroundColor: 'rgba(10, 10, 10, 0.85)',
+                border: '1px solid rgba(239,68,68,0.5)',
+                borderRadius: 'var(--radius-badge)',
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                color: '#ffffff',
+                display: 'flex',
+                gap: '12px',
+              }}
+            >
+              <span style={{ color: '#ef4444' }}>■</span> Microaneurysms / Hemorrhages
+              <span style={{ color: '#facc15' }}>■</span> Exudates / Cotton-Wool Spots
+            </div>
+          )}
           {activeImageView === 'heatmap' && result && (
             <div
               style={{

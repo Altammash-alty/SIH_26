@@ -1,0 +1,1 @@
+Bayesian optimization search (MATLAB bayesopt, Statistics and Machine Learning Toolbox) used to calibrate segmentLesions.m's detection thresholds against IDRiD ground truth. Referenced in results/ for how the locked parameters in config_calibrated.m were derived.

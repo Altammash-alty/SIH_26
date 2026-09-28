@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { TrustStrip } from './components/TrustStrip';
@@ -13,13 +13,39 @@ import { ExplainabilitySection } from './components/ExplainabilitySection';
 export function App() {
   const [screeningOpen, setScreeningOpen] = useState(false);
 
+  // Redundant guaranteed exits: Escape key handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setScreeningOpen(false);
+      }
+    };
+    if (screeningOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [screeningOpen]);
+
   return (
     <div style={{ minHeight: '100vh', backgroundColor: 'var(--canvas)', color: 'var(--ink)' }}>
       {screeningOpen && (
-        <div className="modal-overlay">
+        <div 
+          className="modal-overlay"
+          onClick={(e) => {
+            // Close if clicked on the overlay background
+            if (e.target === e.currentTarget) {
+              setScreeningOpen(false);
+            }
+          }}
+        >
           <div className="modal-content">
             <div
               style={{
+                position: 'sticky',
+                top: 0,
+                zIndex: 10,
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
@@ -40,7 +66,7 @@ export function App() {
                 className="btn-secondary"
                 style={{ padding: '6px 14px', fontSize: '13px' }}
               >
-                Close
+                Close (Esc)
               </button>
             </div>
             <div>

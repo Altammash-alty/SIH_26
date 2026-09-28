@@ -1,0 +1,19 @@
+{
+  "darkSensitivity": 4.0366862141012234,
+  "brightSensitivity": 4.8648521206385311,
+  "marginFactor": 1.1143708027850177,
+  "darkMaxSize": 4528,
+  "brightMaxSize": 3444,
+  "vesselBufferRadius": 4,
+  "solidityCutoff": 0.81570003979765682,
+  "localContrastMargin": 0.14815039608874261,
+  "calibration_date": "28-Sep-2026 15:04:37",
+  "dataset": "IDRiD",
+  "split_seed": 2026,
+  "tune_sample_size": 40,
+  "bayesopt_iterations": 40,
+  "selection_loss": 0.55675807416267942,
+  "selection_sensitivity": 0.921875,
+  "selection_specificity": 0.052631578947368418,
+  "selection_accuracy": 0.30392156862745096
+}

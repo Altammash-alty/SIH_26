@@ -69,6 +69,18 @@ function [isTypical, distributionScore, flagReason, details] = checkDistribution
             statsPath = cfg.ood.statsFilePath;
         end
 
+        if ~exist(statsPath, 'file')
+            cand = fullfile('models', statsPath);
+            if exist(cand, 'file')
+                statsPath = cand;
+            else
+                cand = fullfile(fileparts(mfilename('fullpath')), '..', '..', 'models', statsPath);
+                if exist(cand, 'file')
+                    statsPath = cand;
+                end
+            end
+        end
+
         if exist(statsPath, 'file')
             loaded = load(statsPath);
             if isfield(loaded, 'refStats')

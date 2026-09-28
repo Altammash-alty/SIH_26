@@ -1,0 +1,8 @@
+SIH 26038 REFERABLE-DR LOCKED PIPELINE FILE HASHES (SHA-256)
+Generated: 29-Sep-2026 00:41:15
+
+results\locked_model_bagged_trees.mat : a0ab8d3c61ab5a66098de89d78d79d5758f348fa23372dca2ac8a737cdaa872e
+C:\Users\mdalt\OneDrive\Desktop\SIH_26\config.m : 005a70835c37ae5dc8f2121d1c306ed99347a61ff86f182568da50e25c89ed0f
+C:\Users\mdalt\OneDrive\Desktop\SIH_26\evalReferable.m : 6ab9cc41437f426468ca65ce2e6f6af9071c23c1f3e8e0a0096b0746b88855ea
+C:\Users\mdalt\OneDrive\Desktop\SIH_26\+classify\gradeDR.m : d5881bf112f22df2ac9fc81fe9646718bac5f77b0ca3a29a7d0245558cdcaed4
+C:\Users\mdalt\OneDrive\Desktop\SIH_26\+segment\segmentAll.m : d71965d27b44c29a970bb00bd135e0fdbd0b8c4ed6b2842a0daf2afed69d08b5

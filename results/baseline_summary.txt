@@ -1,0 +1,47 @@
+
+=================================================================
+ VALIDATION HARNESS: IDRiD Train SELECTION Split (102 images)
+ Total Images to Evaluate: 102
+ Output CSV Destination:   results/baseline_report.csv
+=================================================================
+  Processed 10 / 102 images...
+  Processed 20 / 102 images...
+  Processed 30 / 102 images...
+  Processed 40 / 102 images...
+  Processed 50 / 102 images...
+  Processed 60 / 102 images...
+  Processed 70 / 102 images...
+  Processed 80 / 102 images...
+  Processed 90 / 102 images...
+  Processed 100 / 102 images...
+  Processed 102 / 102 images...
+
+================== VALIDATION REPORT SUMMARY ==================
+ Dataset / Cohort: IDRiD Train SELECTION Split (102 images) (n = 102)
+ Quality Gate Rejections: 1 / 102 (1.0%)
+
+ 5x5 Confusion Matrix (Rows: Actual Grade 0-4, Cols: Predicted Grade 0-4):
+     0     0     1     0    32
+     0     0     0     0     5
+     0     0     0     0    34
+     0     0     1     0    17
+     0     0     0     0    12
+
+ Exact-Grade Accuracy:        11.8% (12/102)
+ Within-1-Grade Accuracy:     29.4% (30/102)
+ Referable DR Sensitivity:    100.0% (64/64)  [95% CI: 94.3% - 100.0%] (Target: >90%)
+ Referable DR Specificity:    0.0% (0/38)  [95% CI: 0.0% - 9.2%] (Target: >85%)
+
+ Error Direction:
+   Under-graded cases:        1 / 102 (1.0%)
+   Over-graded cases:         89 / 102 (87.3%)
+
+ Rule vs Neural Network Disagreement:
+   Rule overrode NN:          2 / 102 (2.0%)
+
+ Grade 0 False Positive Audit (n = 33 Normal Images):
+   Images with darkCount > 0:   33 / 33 (Mean: 13.5, Median: 13.0)
+   Images with brightCount > 0: 33 / 33 (Mean: 40.2, Median: 40.0)
+ Detailed CSV saved to:        results/baseline_report.csv
+=================================================================
+

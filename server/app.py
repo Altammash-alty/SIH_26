@@ -7,6 +7,7 @@ import io
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 from scipy import ndimage
+from scipy.ndimage import label as nd_label
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -22,23 +23,52 @@ RESULTS_DIR = BASE_DIR / "results"
 app = FastAPI(
     title="DR Screening Pipeline Tele-Ophthalmology API",
     description="Backend API linking web frontend with Autonomous DR Screening Pipeline",
-    version="1.0.0"
+    version="2.0.0"
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIGURATION (mirrors config.m adaptive thresholds)
+# ─────────────────────────────────────────────────────────────────────────────
+CFG = {
+    "dark_se_radius": 12,           # px – bottom-hat structuring element
+    "dark_sensitivity": 3.5,        # N σ above image's own background (synced with config.m)
+    "dark_local_min_contrast": 0.10, # fraction [0,1] – raised from 0.04 (synced with config.m)
+    "dark_vessel_dilation": 3,      # px – vessel mask expansion
+    "dark_min_size": 10,            # px² – raised from 3 (synced with config.m)
+    "dark_max_size": 2500,          # px²
+    "dark_max_eccentricity": 0.96,
+    "dark_min_solidity": 0.70,
+
+    "bright_se_radius": 10,         # px – top-hat structuring element
+    "bright_sensitivity": 3.5,      # N σ (synced with config.m)
+    "bright_local_min_contrast": 0.10, # fraction [0,1] – raised from 0.05
+    "bright_min_size": 8,           # px² – raised from 3
+    "bright_max_size": 8000,        # px²
+
+    # Grading (ICDR / ETDRS 4-2-1 rule)
+    "mild_max_mas": 5,
+    "severe_hemo_per_quad": 20,
+    "grade3_total_dark": 80,
+    "grade4_neovascular_ratio": 0.02,
+}
+
 
 
 def assess_quality_gate(gray: np.ndarray, green: np.ndarray, mask: np.ndarray) -> Dict[str, Any]:
-    """Calibrated quality assessment that accepts standard fundus photos while still flagging truly poor captures."""
+    """Calibrated quality assessment that accepts standard fundus photos."""
     if gray.size == 0 or green.size == 0:
         return {
-            "isGood": False,
-            "overallScore": 0.0,
-            "blurScore": 0.0,
-            "blurPassed": False,
-            "illumScore": 0.0,
-            "illumPassed": False,
-            "fovScore": 0.0,
-            "fovPassed": False,
-            "qualityPasses": 0,
+            "isGood": False, "overallScore": 0.0, "blurScore": 0.0,
+            "blurPassed": False, "illumScore": 0.0, "illumPassed": False,
+            "fovScore": 0.0, "fovPassed": False, "qualityPasses": 0,
             "reason": "No image data available for quality assessment.",
         }
 
@@ -70,33 +100,323 @@ def assess_quality_gate(gray: np.ndarray, green: np.ndarray, mask: np.ndarray) -
 
     if is_good:
         reason = "Image quality acceptable for reliable AI evaluation."
-    elif quality_passes >= 2:
-        reason = "Borderline quality. Proceeding with a clinical review because the image is still usable."
     else:
         reason = "Image quality is too low for a reliable result. Please upload a clearer fundus image."
 
     return {
-        "isGood": is_good,
-        "overallScore": round(overall_quality_score, 1),
-        "blurScore": blur_score,
-        "blurPassed": blur_passed,
-        "illumScore": round(illum_mean / 2.55, 1),
-        "illumPassed": illum_passed,
-        "fovScore": round(area_ratio * 100.0, 1),
-        "fovPassed": fov_passed,
-        "qualityPasses": quality_passes,
-        "reason": reason,
+        "isGood": is_good, "overallScore": round(overall_quality_score, 1),
+        "blurScore": blur_score, "blurPassed": blur_passed,
+        "illumScore": round(illum_mean / 2.55, 1), "illumPassed": illum_passed,
+        "fovScore": round(area_ratio * 100.0, 1), "fovPassed": fov_passed,
+        "qualityPasses": quality_passes, "reason": reason,
     }
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+def grey_closing(arr: np.ndarray, radius: int) -> np.ndarray:
+    """Morphological grey closing via dilation then erosion."""
+    struct = ndimage.generate_binary_structure(2, 1)
+    size = 2 * radius + 1
+    return ndimage.grey_closing(arr, size=(size, size))
 
+
+def grey_opening(arr: np.ndarray, radius: int) -> np.ndarray:
+    size = 2 * radius + 1
+    return ndimage.grey_opening(arr, size=(size, size))
+
+
+def get_region_props(labeled: np.ndarray, binary: np.ndarray, n: int):
+    """Returns list of dicts with Area, Centroid, Eccentricity, Solidity, PixelList."""
+    props = []
+    for i in range(1, n + 1):
+        comp = labeled == i
+        area = int(np.sum(comp))
+        if area == 0:
+            continue
+        ys, xs = np.where(comp)
+        cy, cx = float(np.mean(ys)), float(np.mean(xs))
+        # Eccentricity via second moments
+        if area > 4:
+            mu20 = float(np.mean((xs - cx) ** 2))
+            mu02 = float(np.mean((ys - cy) ** 2))
+            mu11 = float(np.mean((xs - cx) * (ys - cy)))
+            common = np.sqrt(max(0.0, (mu20 - mu02) ** 2 + 4 * mu11 ** 2))
+            lam1 = (mu20 + mu02 + common) / 2.0
+            lam2 = (mu20 + mu02 - common) / 2.0
+            ecc = float(np.sqrt(max(0.0, 1.0 - lam2 / max(lam1, 1e-9))))
+        else:
+            ecc = 0.0
+        # Solidity: area / convex hull area (approximate with bounding box)
+        # Real convex hull is expensive; approximate: ratio of area to bounding-rect area
+        h = int(ys.max() - ys.min() + 1)
+        w = int(xs.max() - xs.min() + 1)
+        bbox_area = max(1, h * w)
+        solidity = area / bbox_area  # crude but fast approximation
+        props.append({
+            "area": area, "cy": cy, "cx": cx,
+            "eccentricity": ecc, "solidity": solidity,
+        })
+    return props
+
+
+def get_quadrant(px: float, py: float, fovea_x: float, fovea_y: float) -> int:
+    """Returns quadrant index 0-3: [ST, SN, IT, IN]."""
+    if py < fovea_y:
+        return 0 if px < fovea_x else 1
+    else:
+        return 2 if px < fovea_x else 3
+
+
+def segment_dark_lesions(
+    G: np.ndarray, R: np.ndarray, B: np.ndarray,
+    vessel_mask: np.ndarray, od_mask: np.ndarray,
+    eroded_mask: np.ndarray, fovea_x: float, fovea_y: float,
+):
+    """
+    Adaptive σ-threshold bottom-hat detection for MAs and hemorrhages.
+    Mirrors segmentLesions.m dark-lesion path exactly.
+    Returns: (mask, ma_count, hemo_count, quad_dark)
+    """
+    cfg = CFG
+    # Bottom-hat on green channel: highlights dark local minima
+    se_r = cfg["dark_se_radius"]
+    background = grey_closing(G.astype(float), se_r)
+    bothat = np.clip(background - G.astype(float), 0, 255)
+    bothat[~eroded_mask] = 0.0
+
+    # Dilate vessel mask by 3 px to eliminate bifurcation artifacts
+    vessel_dil = ndimage.binary_dilation(
+        vessel_mask,
+        structure=ndimage.generate_binary_structure(2, 1),
+        iterations=cfg["dark_vessel_dilation"]
+    )
+    non_vessel_mask = eroded_mask & (~vessel_dil) & (~od_mask)
+
+    # ── Adaptive threshold: image's own background distribution ──
+    bg_vals = bothat[non_vessel_mask].astype(float)
+    if len(bg_vals) < 10:
+        bg_mean, bg_std = 0.0, 1.0
+    else:
+        bg_mean = float(np.mean(bg_vals))
+        bg_std = float(np.std(bg_vals))
+    dark_thresh = bg_mean + cfg["dark_sensitivity"] * max(bg_std, 0.5)
+
+    raw_cand = (bothat > dark_thresh) & non_vessel_mask
+
+    # ── Local contrast gate (real lesions must contrast against immediate surround) ──
+    local_bg = grey_closing(G.astype(float), 36)
+    dark_contrast = np.clip(local_bg - G.astype(float), 0, 255) / 255.0  # normalise to [0,1]
+    dark_contrast[~non_vessel_mask] = 0.0
+    raw_cand = raw_cand & (dark_contrast >= cfg["dark_local_min_contrast"])
+
+    # ── Size filter: remove tiny noise and large artefacts ──
+    labeled, num_objects = nd_label(raw_cand)
+
+    microaneurysm_count = 0
+    hemorrhage_count = 0
+    dark_lesion_mask = np.zeros_like(eroded_mask, dtype=bool)
+    quad_dark = [0, 0, 0, 0]
+
+    if num_objects > 0:
+        # Compute sizes for all objects in one pass
+        sizes = ndimage.sum(raw_cand, labeled, range(1, num_objects + 1))
+        for comp_idx, area in enumerate(sizes, start=1):
+            area = int(area)
+            if area < cfg["dark_min_size"] or area > cfg["dark_max_size"]:
+                continue
+            comp = (labeled == comp_idx)
+            ys, xs = np.where(comp)
+            if len(ys) == 0:
+                continue
+            cy, cx = float(np.mean(ys)), float(np.mean(xs))
+
+            # Eccentricity
+            if area > 4:
+                mu20 = float(np.mean((xs - cx) ** 2))
+                mu02 = float(np.mean((ys - cy) ** 2))
+                mu11 = float(np.mean((xs - cx) * (ys - cy)))
+                common = np.sqrt(max(0.0, (mu20 - mu02) ** 2 + 4 * mu11 ** 2))
+                lam1 = (mu20 + mu02 + common) / 2.0
+                lam2 = (mu20 + mu02 - common) / 2.0
+                ecc = float(np.sqrt(max(0.0, 1.0 - lam2 / max(lam1, 1e-9))))
+            else:
+                ecc = 0.0
+
+            # Solidity (bounding-box approximation)
+            h_bb = int(ys.max() - ys.min() + 1)
+            w_bb = int(xs.max() - xs.min() + 1)
+            solidity = area / max(1, h_bb * w_bb)
+
+            # Shape gates
+            if ecc >= cfg["dark_max_eccentricity"]:
+                continue
+            if solidity < cfg["dark_min_solidity"]:
+                continue
+
+            dark_lesion_mask |= comp
+            q = get_quadrant(cx, cy, fovea_x, fovea_y)
+            quad_dark[q] += 1
+
+            if area <= 18:
+                microaneurysm_count += 1
+            else:
+                hemorrhage_count += 1
+
+    return dark_lesion_mask, microaneurysm_count, hemorrhage_count, quad_dark
+
+
+def segment_bright_lesions(
+    G: np.ndarray, R: np.ndarray, B: np.ndarray,
+    od_mask: np.ndarray, eroded_mask: np.ndarray,
+    fovea_x: float, fovea_y: float,
+):
+    """
+    Adaptive σ-threshold top-hat detection + yellowness gate for exudates/CWS.
+    Mirrors segmentLesions.m bright-lesion path exactly.
+    Returns: (mask, hard_exudate_count, cotton_wool_count, quad_bright)
+    """
+    cfg = CFG
+    # Exclude optic disc + dilate OD margin
+    od_dilated = ndimage.binary_dilation(od_mask, iterations=8)
+    non_od_mask = eroded_mask & (~od_dilated)
+
+    # Top-hat: highlights bright local maxima
+    se_r = cfg["bright_se_radius"]
+    tophat_g = np.clip(G.astype(float) - grey_opening(G.astype(float), se_r), 0, 255)
+    tophat_r = np.clip(R.astype(float) - grey_opening(R.astype(float), se_r), 0, 255)
+    bright_signal = (0.6 * tophat_g + 0.4 * tophat_r)
+    bright_signal[~non_od_mask] = 0.0
+
+    # ── Yellowness gate: real exudates are yellow (high R+G, low B) ──
+    Gf = G.astype(float) / 255.0
+    Rf = R.astype(float) / 255.0
+    Bf = B.astype(float) / 255.0
+    yellowness = (Rf > 0.3) & (Gf > 0.3) & (Bf < 0.6 * (Rf + Gf) / 2.0)
+    bright_signal = bright_signal * yellowness.astype(float)
+
+    # ── Adaptive threshold ──
+    bg_vals = bright_signal[non_od_mask].astype(float)
+    if len(bg_vals) < 10:
+        bg_mean, bg_std = 0.0, 1.0
+    else:
+        bg_mean = float(np.mean(bg_vals))
+        bg_std = float(np.std(bg_vals))
+    bright_thresh = bg_mean + cfg["bright_sensitivity"] * max(bg_std, 0.5)
+
+    raw_cand = (bright_signal > bright_thresh) & non_od_mask
+
+    # ── Local contrast gate ──
+    local_bright_bg = (
+        0.6 * grey_opening(Gf, 30) + 0.4 * grey_opening(Rf, 30)
+    )
+    bright_contrast = np.clip(
+        (0.6 * Gf + 0.4 * Rf) - local_bright_bg, 0, 1
+    )
+    bright_contrast[~non_od_mask] = 0.0
+    raw_cand = raw_cand & (bright_contrast >= cfg["bright_local_min_contrast"])
+
+    # ── Size filter ──
+    labeled, num_objects = nd_label(raw_cand)
+
+    hard_exudate_count = 0
+    cotton_wool_count = 0
+    bright_lesion_mask = np.zeros_like(eroded_mask, dtype=bool)
+    quad_bright = [0, 0, 0, 0]
+
+    if num_objects > 0:
+        b_sizes = ndimage.sum(raw_cand, labeled, range(1, num_objects + 1))
+        for comp_idx, area in enumerate(b_sizes, start=1):
+            area = int(area)
+            if area < cfg["bright_min_size"] or area > cfg["bright_max_size"]:
+                continue
+            comp = (labeled == comp_idx)
+            cy, cx = ndimage.center_of_mass(comp)
+            bright_lesion_mask |= comp
+            q = get_quadrant(float(cx), float(cy), fovea_x, fovea_y)
+            quad_bright[q] += 1
+
+            # Hard exudates: small-medium bright spots (< 35 px²); CWS: larger, fuzzier
+            if area <= 35:
+                hard_exudate_count += 1
+            else:
+                cotton_wool_count += 1
+
+    return bright_lesion_mask, hard_exudate_count, cotton_wool_count, quad_bright
+
+
+def grade_dr(
+    microaneurysm_count: int, hemorrhage_count: int,
+    hard_exudate_count: int, cotton_wool_count: int,
+    neovascular_count: int, quad_dark: List[int],
+    vessel_density: float,
+) -> tuple:
+    """
+    ICDR / ETDRS 4-2-1 grading rule engine.
+    Mirrors gradeDR.m clinical decision rules exactly.
+    Returns: (grade, grade_name, icd10, urgency, probs)
+    """
+    total_dark = microaneurysm_count + hemorrhage_count
+    total_bright = hard_exudate_count + cotton_wool_count
+    cfg = CFG
+
+    # Count quadrants with ≥ severeHemoPerQuad dark lesions
+    severe_quads = sum(1 for q in quad_dark if q >= cfg["severe_hemo_per_quad"])
+
+    # Rule 1: No lesions → Grade 0
+    if total_dark == 0 and total_bright == 0:
+        grade = 0
+        grade_name = "No Apparent DR (Grade 0)"
+        icd10 = "E11.9 / H36.0"
+        urgency = "Routine annual tele-screening in 12 months"
+        probs = [0.95, 0.03, 0.015, 0.003, 0.002]
+
+    # Rule 2: Microaneurysms ONLY (≤ 5), no hemorrhages, no exudates → Grade 1
+    elif (
+        total_dark <= cfg["mild_max_mas"]
+        and hemorrhage_count == 0
+        and total_bright == 0
+    ):
+        grade = 1
+        grade_name = "Mild Nonproliferative DR (Grade 1)"
+        icd10 = "E11.319"
+        urgency = "Routine clinical re-evaluation in 6 to 12 months"
+        probs = [0.05, 0.89, 0.04, 0.01, 0.01]
+
+    # Rule 3: Proliferative DR (neovascularization OR extreme vessel density + high lesion load)
+    elif neovascular_count > 0 or (
+        total_dark >= 60 and vessel_density > 17.5
+    ):
+        grade = 4
+        grade_name = "Proliferative Diabetic Retinopathy (Grade 4)"
+        icd10 = "E11.359"
+        urgency = "Immediate vitreoretinal specialist referral (< 48-72 hours)"
+        probs = [0.01, 0.01, 0.02, 0.06, 0.90]
+
+    # Rule 4: Severe NPDR – ETDRS 4-2-1 rule
+    elif (
+        severe_quads >= 4
+        or (severe_quads >= 2 and total_dark >= 50)
+        or total_dark >= cfg["grade3_total_dark"]
+    ):
+        grade = 3
+        grade_name = "Severe Nonproliferative DR (Grade 3)"
+        icd10 = "E11.339"
+        urgency = "Urgent ophthalmology referral in 2 to 4 weeks (ETDRS 4-2-1 Rule)"
+        probs = [0.01, 0.02, 0.05, 0.88, 0.04]
+
+    # Rule 5: Moderate NPDR – more than MAs only, but below severe threshold
+    else:
+        grade = 2
+        grade_name = "Moderate Nonproliferative DR (Grade 2)"
+        icd10 = "E11.329"
+        urgency = "Comprehensive dilated retinal examination in 3 to 6 months"
+        probs = [0.02, 0.06, 0.85, 0.05, 0.02]
+
+    return grade, grade_name, icd10, urgency, probs
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTTP MODELS
+# ─────────────────────────────────────────────────────────────────────────────
 class SimulationRequest(BaseModel):
     numPatients: int = 120
     arrivalRatePerHour: float = 15.0
@@ -108,6 +428,10 @@ class SimulationRequest(BaseModel):
     costManualScreeningUSD: float = 45.0
     costAiAssistedScreeningUSD: float = 12.5
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health_check():
     has_idrid_train = (DATA_DIR / "idrid" / "grading" / "train" / "images").exists()
@@ -122,16 +446,14 @@ def health_check():
         }
     }
 
+
 @app.get("/api/samples")
 def get_sample_images():
-    """Returns a clinically diverse set of fundus samples spanning all DR stages and quality conditions."""
+    """Returns a clinically diverse set of fundus samples spanning all DR stages."""
     samples = []
     stage_names = [
-        "No DR (Grade 0)",
-        "Mild NPDR (Grade 1)",
-        "Moderate NPDR (Grade 2)",
-        "Severe NPDR (Grade 3)",
-        "Proliferative DR (Grade 4)"
+        "No DR (Grade 0)", "Mild NPDR (Grade 1)", "Moderate NPDR (Grade 2)",
+        "Severe NPDR (Grade 3)", "Proliferative DR (Grade 4)"
     ]
 
     test_csv = DATA_DIR / "idrid" / "grading" / "test" / "labels.csv"
@@ -199,6 +521,7 @@ def get_sample_images():
 
     return {"samples": samples}
 
+
 @app.get("/api/image/raw")
 def serve_image(category: str, filename: str):
     if category == "idrid_test":
@@ -209,85 +532,66 @@ def serve_image(category: str, filename: str):
         target = DATA_DIR / "messidor2" / "images" / filename
     else:
         raise HTTPException(status_code=400, detail="Invalid category")
-    
+
     if not target.exists():
         raise HTTPException(status_code=404, detail="Image not found")
     return FileResponse(target)
 
+
 @app.post("/api/simulate")
 def run_simulation(params: SimulationRequest):
-    """Executes discrete-event Monte Carlo clinic simulation using empirical or requested parameters."""
+    """Monte Carlo clinic throughput simulation."""
     np.random.seed(42)
-    
     num_patients = params.numPatients
     arrival_rate = params.arrivalRatePerHour / 60.0
     mean_inter_arrival = 1.0 / max(0.01, arrival_rate)
-    
+
     inter_arrivals = np.random.exponential(mean_inter_arrival, num_patients)
     arrival_times = np.cumsum(inter_arrivals)
-    
-    # Population DR distribution: Grade 0 (65%), Grade 1 (18%), Grade 2 (10%), Grade 3 (4%), Grade 4 (3%)
+
     grade_probs = [0.65, 0.18, 0.10, 0.04, 0.03]
     grades = np.random.choice([0, 1, 2, 3, 4], size=num_patients, p=grade_probs)
-    
-    # Retake probability (empirical default 8%)
     retakes = np.random.rand(num_patients) < (params.retakeProbability or 0.08)
-    
-    # Technician camera time
+
     cam_durations = np.maximum(1.0, np.random.normal(params.scanDurationMinutes, 0.5, num_patients))
-    cam_durations += retakes * 2.0  # +2 min penalty for retake
-    
+    cam_durations += retakes * 2.0
     cam_end_times = np.zeros(num_patients)
     current_cam_time = 0.0
     for i in range(num_patients):
         start_t = max(arrival_times[i], current_cam_time)
-        end_t = start_t + cam_durations[i]
-        cam_end_times[i] = end_t
-        current_cam_time = end_t
-        
-    ai_process_time_min = 2.5 / 60.0  # ~2.5 seconds
-    ai_ready_times = cam_end_times + ai_process_time_min
-    
-    # Doctor review times
-    doc_times = np.zeros(num_patients)
-    for i in range(num_patients):
-        g = grades[i]
-        if g == 0:
-            doc_times[i] = params.doctorReviewTimeGrade0Minutes
-        elif g == 1:
-            doc_times[i] = params.doctorReviewTimeGrade1Minutes
-        else:
-            doc_times[i] = params.doctorReviewTimeGrade24Minutes
-            
+        cam_end_times[i] = start_t + cam_durations[i]
+        current_cam_time = cam_end_times[i]
+
+    ai_ready_times = cam_end_times + (2.5 / 60.0)
+    doc_times = np.where(grades == 0, params.doctorReviewTimeGrade0Minutes,
+                np.where(grades == 1, params.doctorReviewTimeGrade1Minutes,
+                         params.doctorReviewTimeGrade24Minutes))
+
     doc_end_times = np.zeros(num_patients)
     current_doc_time = 0.0
     for i in range(num_patients):
         start_d = max(ai_ready_times[i], current_doc_time)
-        end_d = start_d + doc_times[i]
-        doc_end_times[i] = end_d
-        current_doc_time = end_d
-        
+        doc_end_times[i] = start_d + doc_times[i]
+        current_doc_time = doc_end_times[i]
+
     total_wait_times = doc_end_times - arrival_times
-    ai_clinic_makespan_hrs = doc_end_times[-1] / 60.0
-    ai_throughput = num_patients / max(0.1, ai_clinic_makespan_hrs)
-    
-    # Manual screening comparison
+    ai_makespan_hrs = doc_end_times[-1] / 60.0
+    ai_throughput = num_patients / max(0.1, ai_makespan_hrs)
+
     manual_doc_durations = np.maximum(5.0, np.random.normal(12.0, 2.5, num_patients))
     manual_end_times = np.zeros(num_patients)
     curr_m = 0.0
     for i in range(num_patients):
         start_m = max(cam_end_times[i], curr_m)
-        end_m = start_m + manual_doc_durations[i]
-        manual_end_times[i] = end_m
-        curr_m = end_m
-        
+        manual_end_times[i] = start_m + manual_doc_durations[i]
+        curr_m = manual_end_times[i]
+
     manual_makespan_hrs = manual_end_times[-1] / 60.0
     manual_throughput = num_patients / max(0.1, manual_makespan_hrs)
     manual_wait_times = manual_end_times - arrival_times
-    
     doctor_time_saved_pct = ((np.sum(manual_doc_durations) - np.sum(doc_times)) / np.sum(manual_doc_durations)) * 100.0
     daily_cost_savings = num_patients * (params.costManualScreeningUSD - params.costAiAssistedScreeningUSD)
-    
+
     return {
         "numPatients": num_patients,
         "aiThroughputPatientsPerHour": round(float(ai_throughput), 1),
@@ -297,17 +601,16 @@ def run_simulation(params: SimulationRequest):
         "manualAvgWaitTimeMinutes": round(float(np.mean(manual_wait_times)), 1),
         "doctorTimeSavedPercent": round(float(doctor_time_saved_pct), 1),
         "totalDailyCostSavingsUSD": round(float(daily_cost_savings), 2),
-        "totalAiShiftHours": round(float(ai_clinic_makespan_hrs), 1),
+        "totalAiShiftHours": round(float(ai_makespan_hrs), 1),
         "totalManualShiftHours": round(float(manual_makespan_hrs), 1),
         "gradeCounts": {
-            "grade0": int(np.sum(grades == 0)),
-            "grade1": int(np.sum(grades == 1)),
-            "grade2": int(np.sum(grades == 2)),
-            "grade3": int(np.sum(grades == 3)),
+            "grade0": int(np.sum(grades == 0)), "grade1": int(np.sum(grades == 1)),
+            "grade2": int(np.sum(grades == 2)), "grade3": int(np.sum(grades == 3)),
             "grade4": int(np.sum(grades == 4)),
         },
         "retakeCount": int(np.sum(retakes))
     }
+
 
 @app.post("/api/screen")
 async def screen_fundus_image(
@@ -332,23 +635,21 @@ async def screen_fundus_image(
     else:
         raise HTTPException(status_code=400, detail="No image provided")
 
-    # Resize standard working scale
+    # ── Standardise to 768 px long-edge (matches MATLAB pipeline) ──
     w, h = pil_img.size
     scale = 768.0 / max(h, w)
     new_w, new_h = int(w * scale), int(h * scale)
     pil_img = pil_img.resize((new_w, new_h), Image.Resampling.BILINEAR)
     img_arr = np.array(pil_img)
-    
-    # Channels
+
     R = img_arr[:, :, 0]
     G = img_arr[:, :, 1]
     B = img_arr[:, :, 2]
     gray = (0.2989 * R + 0.5870 * G + 0.1140 * B).astype(np.uint8)
 
-    # -------------------------------------------------------------
-    # Stage 1: Quality Gate
-    # -------------------------------------------------------------
-    # Aperture Mask
+    # ═════════════════════════════════════════════════════════════════════════
+    # STAGE 1: Quality Gate
+    # ═════════════════════════════════════════════════════════════════════════
     mask = gray > 15
     mask = ndimage.binary_fill_holes(mask)
     eroded_mask = ndimage.binary_erosion(mask, structure=np.ones((15, 15)))
@@ -360,27 +661,22 @@ async def screen_fundus_image(
     illum_mean = float(np.mean(G[mask])) if np.any(mask) else 0.0
     illum_std = float(np.std(G[mask])) if np.any(mask) else 0.0
     area_ratio = float(np.sum(mask)) / (mask.shape[0] * mask.shape[1])
-    fov_passed = quality["fovPassed"]
-    illum_passed = quality["illumPassed"]
-    blur_passed = quality["blurPassed"]
     is_good = quality["isGood"]
     overall_quality_score = quality["overallScore"]
 
-    # -------------------------------------------------------------
-    # Stage 2: CLAHE Green-Channel Enhancement
-    # -------------------------------------------------------------
-    # Contrast Equalization on Green Channel
+    # ═════════════════════════════════════════════════════════════════════════
+    # STAGE 2: CLAHE Green-Channel Enhancement
+    # ═════════════════════════════════════════════════════════════════════════
     pil_green = Image.fromarray(G)
     enh_green_pil = ImageOps.equalize(pil_green)
     enh_green = np.array(enh_green_pil)
-    
     enh_img_arr = img_arr.copy()
     enh_img_arr[:, :, 1] = enh_green
 
-    # -------------------------------------------------------------
-    # Stage 3: Anatomical & Multi-Pathology Retinal Lesion Segmentation
-    # -------------------------------------------------------------
-    # Optic Disc & Cup
+    # ═════════════════════════════════════════════════════════════════════════
+    # STAGE 3: Retinal Segmentation
+    # ═════════════════════════════════════════════════════════════════════════
+    # ── Optic Disc ──
     od_blur = ndimage.gaussian_filter(R.astype(float), sigma=10.0)
     od_blur[~mask] = 0.0
     od_y, od_x = np.unravel_index(np.argmax(od_blur), od_blur.shape)
@@ -388,160 +684,55 @@ async def screen_fundus_image(
     cup_r = int(od_r * 0.35)
     cdr = round(cup_r / float(od_r), 2)
 
-    # Optic disc mask with buffer
     y_coords, x_coords = np.ogrid[:new_h, :new_w]
-    dist_od = np.sqrt((x_coords - od_x)**2 + (y_coords - od_y)**2)
+    dist_od = np.sqrt((x_coords - od_x) ** 2 + (y_coords - od_y) ** 2)
     od_mask = dist_od <= (od_r * 1.25)
 
-    # Macula / Fovea Localization (~2.5 disc diameters temporal to OD)
-    # Estimate laterality based on OD position (if OD on right -> Right Eye OD; if on left -> Left Eye OS)
+    # ── Fovea / Macula localisation ──
     if od_x > new_w * 0.5:
         fovea_x = max(int(new_w * 0.2), int(od_x - od_r * 2.5))
     else:
         fovea_x = min(int(new_w * 0.8), int(od_x + od_r * 2.5))
     fovea_y = int(np.clip(od_y, new_h * 0.3, new_h * 0.7))
-    dist_fovea = np.sqrt((x_coords - fovea_x)**2 + (y_coords - fovea_y)**2)
+    dist_fovea = np.sqrt((x_coords - fovea_x) ** 2 + (y_coords - fovea_y) ** 2)
 
-    # Retinal Vessels (High-pass green filter)
+    # ── Retinal Vessels (high-pass green filter) ──
     lowpass = ndimage.gaussian_filter(G.astype(float), sigma=5.0)
     highpass = G.astype(float) - lowpass
     vessel_mask = (highpass < -5.5) & mask
     vessel_density = round(float(np.sum(vessel_mask)) / float(np.sum(mask)) * 100.0, 1)
 
-    # 1. Dark Lesions (Bottom-hat filter on Green channel)
-    # seDark disk radius ~ 10-12 px
-    inv_green = 255.0 - G.astype(float)
-    background_dark = ndimage.grey_closing(G.astype(float), size=(15, 15))
-    bothat = np.clip(background_dark - G.astype(float), 0, 255)
-    
-    # Exclude vessels and optic disc
-    dilated_vessels = ndimage.binary_dilation(vessel_mask, structure=np.ones((3, 3)))
-    non_vessel_mask = eroded_mask & (~dilated_vessels) & (~od_mask)
+    # ── Dark Lesion Detection (adaptive σ-threshold) ──
+    dark_lesion_mask, microaneurysm_count, hemorrhage_count, quad_dark = segment_dark_lesions(
+        G, R, B, vessel_mask, od_mask, eroded_mask, float(fovea_x), float(fovea_y)
+    )
 
-    dark_cand = (bothat > 12.0) & non_vessel_mask
-    dark_labeled, num_dark = ndimage.label(dark_cand)
-
-    microaneurysm_count = 0
-    hemorrhage_count = 0
-    dark_lesion_mask = np.zeros_like(mask, dtype=bool)
-
-    # ETDRS 4-Quadrant Counts for hemorrhages & MAs [ST, SN, IT, IN]
-    quad_dark = [0, 0, 0, 0]
-    quad_bright = [0, 0, 0, 0]
-
-    def get_quadrant(px, py):
-        # 0: Superior-Temporal, 1: Superior-Nasal, 2: Inferior-Temporal, 3: Inferior-Nasal
-        if py < fovea_y:
-            return 0 if px < fovea_x else 1
-        else:
-            return 2 if px < fovea_x else 3
-
-    if num_dark > 0:
-        sizes = ndimage.sum(dark_cand, dark_labeled, range(1, num_dark + 1))
-        for idx, sz in enumerate(sizes, 1):
-            if sz < 3 or sz > 500:
-                continue
-            component_mask = (dark_labeled == idx)
-            dark_lesion_mask |= component_mask
-            cy, cx = ndimage.center_of_mass(component_mask)
-            q = get_quadrant(cx, cy)
-            quad_dark[q] += 1
-
-            # Microaneurysms: Tiny isolated punctate spots (3 - 18 pixels)
-            if sz <= 18:
-                microaneurysm_count += 1
-            else:
-                # Blot / Flame intraretinal hemorrhages (> 18 pixels)
-                hemorrhage_count += 1
-
-    # 2. Bright Lesions (Top-hat filter on Red & Green channels)
-    # Hard Exudates (bright yellowish, sharp margins) vs Cotton-Wool Spots (soft, fuzzy white)
-    bright_bg = ndimage.grey_opening(G.astype(float), size=(15, 15))
-    tophat_g = np.clip(G.astype(float) - bright_bg, 0, 255)
-    
-    red_bg = ndimage.grey_opening(R.astype(float), size=(15, 15))
-    tophat_r = np.clip(R.astype(float) - red_bg, 0, 255)
-
-    bright_signal = (0.6 * tophat_g + 0.4 * tophat_r) * (~od_mask) * eroded_mask
-    bright_cand = (bright_signal > 16.0)
-    bright_labeled, num_bright = ndimage.label(bright_cand)
-
-    hard_exudate_count = 0
-    cotton_wool_count = 0
-    bright_lesion_mask = np.zeros_like(mask, dtype=bool)
-
-    if num_bright > 0:
-        b_sizes = ndimage.sum(bright_cand, bright_labeled, range(1, num_bright + 1))
-        for idx, sz in enumerate(b_sizes, 1):
-            if sz < 4 or sz > 800:
-                continue
-            comp = (bright_labeled == idx)
-            bright_lesion_mask |= comp
-            cy, cx = ndimage.center_of_mass(comp)
-            q = get_quadrant(cx, cy)
-            quad_bright[q] += 1
-
-            # Distinguish hard exudates (small-to-medium bright yellow) from cotton wool spots (larger, hazy)
-            # Check edge gradient standard deviation
-            if sz <= 35:
-                hard_exudate_count += 1
-            else:
-                cotton_wool_count += 1
-
-    # 3. Neovascularization / Proliferative vessels (fine disorganized capillary fronds)
-    neovascular_count = 0
-    if vessel_density > 18.5 and (hemorrhage_count > 10 or hard_exudate_count > 10):
-        neovascular_count = max(1, int((vessel_density - 17.0) * 1.5))
+    # ── Bright Lesion Detection (adaptive σ-threshold + yellowness gate) ──
+    bright_lesion_mask, hard_exudate_count, cotton_wool_count, quad_bright = segment_bright_lesions(
+        G, R, B, od_mask, eroded_mask, float(fovea_x), float(fovea_y)
+    )
 
     total_dark_lesions = microaneurysm_count + hemorrhage_count
     total_bright_lesions = hard_exudate_count + cotton_wool_count
 
-    # -------------------------------------------------------------
-    # Stage 4: Comprehensive Multi-Biomarker DR Classification (ICDR / ETDRS Gold Standard)
-    # -------------------------------------------------------------
-    # ETDRS 4-2-1 Rule: >= 20 intraretinal hemorrhages in each of 4 quadrants, or prominent venous beading
-    severe_quads = sum(1 for q in quad_dark if q >= 15)
+    # ── Neovascularization (PDR signal: excess vessel density + high lesion load) ──
+    neovascular_count = 0
+    if vessel_density > 18.5 and (hemorrhage_count > 10 or hard_exudate_count > 10):
+        neovascular_count = max(1, int((vessel_density - 17.0) * 1.5))
 
-    if total_dark_lesions == 0 and total_bright_lesions == 0:
-        grade = 0
-        grade_name = "No Apparent DR (Grade 0)"
-        icd10 = "E11.9 / H36.0"
-        urgency = "Routine annual tele-screening in 12 months"
-        probs = [0.95, 0.03, 0.015, 0.003, 0.002]
-    elif total_dark_lesions <= 5 and total_bright_lesions == 0 and hemorrhage_count == 0:
-        # Mild NPDR: Microaneurysms ONLY (ICDR standard)
-        grade = 1
-        grade_name = "Mild Nonproliferative DR (Grade 1)"
-        icd10 = "E11.319"
-        urgency = "Routine clinical re-evaluation in 6 to 12 months"
-        probs = [0.05, 0.89, 0.04, 0.01, 0.01]
-    elif neovascular_count > 0 or (total_dark_lesions >= 50 and vessel_density > 17.5):
-        # Grade 4 Proliferative DR (PDR)
-        grade = 4
-        grade_name = "Proliferative Diabetic Retinopathy (Grade 4)"
-        icd10 = "E11.359"
-        urgency = "Immediate vitreoretinal specialist referral (< 48-72 hours)"
-        probs = [0.01, 0.01, 0.02, 0.06, 0.90]
-    elif severe_quads >= 4 or total_dark_lesions >= 45 or hemorrhage_count >= 25:
-        # Grade 3 Severe NPDR (ETDRS 4-2-1 Rule)
-        grade = 3
-        grade_name = "Severe Nonproliferative DR (Grade 3)"
-        icd10 = "E11.339"
-        urgency = "Urgent ophthalmology referral in 2 to 4 weeks (ETDRS 4-2-1 Rule)"
-        probs = [0.01, 0.02, 0.05, 0.88, 0.04]
-    else:
-        # Grade 2 Moderate NPDR: More than MAs only, but less than severe NPDR
-        grade = 2
-        grade_name = "Moderate Nonproliferative DR (Grade 2)"
-        icd10 = "E11.329"
-        urgency = "Comprehensive dilated retinal examination in 3 to 6 months"
-        probs = [0.02, 0.06, 0.85, 0.05, 0.02]
-
+    # ═════════════════════════════════════════════════════════════════════════
+    # STAGE 4: DR Severity Grading (ICDR / ETDRS 4-2-1 rule)
+    # ═════════════════════════════════════════════════════════════════════════
+    grade, grade_name, icd10, urgency, probs = grade_dr(
+        microaneurysm_count, hemorrhage_count,
+        hard_exudate_count, cotton_wool_count,
+        neovascular_count, quad_dark, vessel_density
+    )
     confidence = float(probs[grade])
 
-    # DME Risk Assessment
-    fovea_involvement = np.any(bright_cand & (dist_fovea <= od_r * 1.2))
-
+    # ── DME Risk Assessment ──
+    bright_cand = bright_lesion_mask
+    fovea_involvement = bool(np.any(bright_cand & (dist_fovea <= od_r * 1.2)))
     if fovea_involvement and total_bright_lesions > 0:
         dme_risk = "High - Clinically Significant Macular Edema (CSME)"
         if grade <= 2:
@@ -551,11 +742,11 @@ async def screen_fundus_image(
     else:
         dme_risk = "None Detected"
 
-    # Trust & Safety Routing Logic
+    # ── Trust & Safety Routing ──
     illum_z = abs(illum_mean - 128.0) / 40.0
     contrast_z = abs(illum_std - 45.0) / 20.0
     fov_z = abs(area_ratio - 0.65) / 0.20
-    mahalanobis_dist = round(float(np.sqrt(illum_z**2 + contrast_z**2 + fov_z**2)), 2)
+    mahalanobis_dist = round(float(np.sqrt(illum_z ** 2 + contrast_z ** 2 + fov_z ** 2)), 2)
     is_typical = mahalanobis_dist <= 3.80
 
     if not is_good:
@@ -571,41 +762,45 @@ async def screen_fundus_image(
         routing_decision = "AUTO_CLEAR"
         routing_reason = f"Non-referable finding ({grade_name}) with high AI confidence ({confidence*100:.1f}%). Eligible for fast-track clearance."
 
-    # Stage 5 Heatmap (Saliency Map)
+    # ═════════════════════════════════════════════════════════════════════════
+    # STAGE 5: Explainability Heatmap
+    # ═════════════════════════════════════════════════════════════════════════
     heat_r = np.clip(R.astype(float) * 0.4 + enh_green.astype(float) * 0.7, 0, 255).astype(np.uint8)
     heat_g = np.clip(G.astype(float) * 0.5, 0, 255).astype(np.uint8)
     heat_b = np.clip(255 - enh_green.astype(float), 0, 255).astype(np.uint8)
     heat_rgb = np.stack([heat_r, heat_g, heat_b], axis=-1)
 
+    # Overlay detected lesions on heatmap for visualisation
+    lesion_overlay = img_arr.copy()
+    # Dark lesions → red overlay
+    lesion_overlay[dark_lesion_mask, 0] = 255
+    lesion_overlay[dark_lesion_mask, 1] = 0
+    lesion_overlay[dark_lesion_mask, 2] = 0
+    # Bright lesions → yellow overlay
+    lesion_overlay[bright_lesion_mask, 0] = 255
+    lesion_overlay[bright_lesion_mask, 1] = 255
+    lesion_overlay[bright_lesion_mask, 2] = 0
+
     def to_b64(arr):
-        im = Image.fromarray(arr)
+        im = Image.fromarray(arr.astype(np.uint8))
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=85)
         return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
     return {
         "patient": {
-            "id": patientId,
-            "age": patientAge,
-            "gender": patientGender,
-            "eye": eyeLaterality,
-            "examDate": "2026-09-03"
+            "id": patientId, "age": patientAge, "gender": patientGender,
+            "eye": eyeLaterality, "examDate": "2026-09-27"
         },
         "stage1Quality": {
-            "isGood": is_good,
-            "overallScore": round(overall_quality_score, 1),
-            "blurScore": round(blur_score, 2),
-            "blurPassed": blur_passed,
-            "illumScore": round(illum_mean / 2.55, 1),
-            "illumPassed": illum_passed,
-            "fovScore": round(area_ratio * 100.0, 1),
-            "fovPassed": fov_passed,
+            "isGood": is_good, "overallScore": round(overall_quality_score, 1),
+            "blurScore": round(blur_score, 2), "blurPassed": quality["blurPassed"],
+            "illumScore": round(illum_mean / 2.55, 1), "illumPassed": quality["illumPassed"],
+            "fovScore": round(area_ratio * 100.0, 1), "fovPassed": quality["fovPassed"],
             "reason": quality["reason"]
         },
         "stage2Preprocess": {
-            "completed": True,
-            "claheGreenChannel": True,
-            "illuminationFlattened": True
+            "completed": True, "claheGreenChannel": True, "illuminationFlattened": True
         },
         "stage3Segmentation": {
             "cupToDiscRatio": cdr,
@@ -623,29 +818,23 @@ async def screen_fundus_image(
             "opticDiscCenter": [int(od_x), int(od_y)]
         },
         "stage4Grading": {
-            "grade": grade,
-            "gradeName": grade_name,
-            "confidence": confidence,
-            "probabilities": probs,
-            "dmeRisk": dme_risk,
-            "urgency": urgency,
-            "icd10Code": icd10
+            "grade": grade, "gradeName": grade_name, "confidence": confidence,
+            "probabilities": probs, "dmeRisk": dme_risk,
+            "urgency": urgency, "icd10Code": icd10
         },
-        "stage5Explainability": {
-            "hasHeatmap": True
-        },
+        "stage5Explainability": {"hasHeatmap": True},
         "routing": {
-            "decision": routing_decision,
-            "reason": routing_reason,
-            "mahalanobisDistance": mahalanobis_dist,
-            "isTypical": is_typical
+            "decision": routing_decision, "reason": routing_reason,
+            "mahalanobisDistance": mahalanobis_dist, "isTypical": is_typical
         },
         "images": {
             "raw": to_b64(img_arr),
             "enhanced": to_b64(enh_img_arr),
-            "heatmap": to_b64(heat_rgb)
+            "heatmap": to_b64(heat_rgb),
+            "lesionOverlay": to_b64(lesion_overlay)
         }
     }
+
 
 if __name__ == "__main__":
     import uvicorn

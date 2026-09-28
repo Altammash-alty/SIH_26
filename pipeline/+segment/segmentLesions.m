@@ -90,33 +90,74 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
     bothatGreen = imbothat(greenCh, seDark);
     bothatGreen = bothatGreen .* erodedMask;
 
-    % Exclude main vascular tree (dilate vessel mask slightly to avoid vessel edge fringes)
-    dilatedVessels = imdilate(vesselMask, strel('disk', 1));
+    % Exclude main vascular tree (dilate vessel mask using configurable vesselBufferRadius)
+    if isfield(cfg.segment.lesion, 'vesselBufferRadius')
+        vesselBufferR = cfg.segment.lesion.vesselBufferRadius;
+    else
+        vesselBufferR = 3;
+    end
+    dilatedVessels = imdilate(vesselMask, strel('disk', vesselBufferR));
     nonVesselMask = erodedMask & ~dilatedVessels & ~odMask;
 
-    % Threshold bottom-hat response
-    darkThresh = cfg.segment.lesion.darkSensitivity;
-    rawDarkCand = (bothatGreen > darkThresh) & nonVesselMask;
+    % Confidence margin factor
+    if isfield(cfg.segment.lesion, 'marginFactor')
+        marginFactor = cfg.segment.lesion.marginFactor;
+    else
+        marginFactor = 1.3;
+    end
+
+    % Statistical Adaptive Thresholding for Dark Lesions
+    % darkSensitivity = N standard deviations above this image's own bottom-hat background
+    bgDarkVals = bothatGreen(nonVesselMask);
+    if isempty(bgDarkVals)
+        bgDarkMean = 0;
+        bgDarkStd = 0.01;
+    else
+        bgDarkMean = mean(bgDarkVals);
+        bgDarkStd = std(bgDarkVals);
+    end
+    darkThresh = bgDarkMean + cfg.segment.lesion.darkSensitivity * bgDarkStd;
+    rawDarkCand = (bothatGreen > darkThresh * marginFactor) & nonVesselMask;
+
+    % Minimum Contrast-Above-Local-Surroundings Check:
+    % Large-radius closing (radius 36px ~ 3x seDark) computes local green background.
+    % Real focal hemorrhages/MAs must be darker than their immediate surrounding background by darkLocalMinContrast.
+    if isfield(cfg.segment.lesion, 'darkLocalMinContrast') && cfg.segment.lesion.darkLocalMinContrast > 0
+        seLocalBg = strel('disk', 36);
+        localDarkBg = imclose(greenCh, seLocalBg);
+        darkContrast = (localDarkBg - greenCh) .* nonVesselMask;
+        rawDarkCand = rawDarkCand & (darkContrast >= cfg.segment.lesion.darkLocalMinContrast);
+    end
 
     % Filter candidate dark lesions by size
     minDarkArea = cfg.segment.lesion.darkMinSize;
     maxDarkArea = cfg.segment.lesion.darkMaxSize;
     
     cleanDark = bwareaopen(rawDarkCand, minDarkArea);
-    if isfield(cfg, 'debug') && cfg.debug
-        fprintf('[segmentLesions] dark raw=%d afterArea=%d\n', nnz(rawDarkCand), nnz(cleanDark));
-    end
     darkCC = bwconncomp(cleanDark);
     darkLesionMask = false(rows, cols);
     darkStatsList = [];
 
+    % Solidity cutoff parameter
+    if isfield(cfg.segment.lesion, 'solidityCutoff')
+        solidityCutoff = cfg.segment.lesion.solidityCutoff;
+    else
+        solidityCutoff = 0.70;
+    end
+
     if darkCC.NumObjects > 0
-        statsD = regionprops(darkCC, 'Area', 'Centroid', 'Eccentricity', 'PixelIdxList');
+        statsD = regionprops(darkCC, 'Area', 'Centroid', 'Eccentricity', 'Solidity', 'PixelIdxList');
+        if isfield(cfg, 'debug') && cfg.debug
+            areasBeforeFilter = [statsD.Area];
+            fprintf('[segmentLesions DEBUG] dark raw=%d afterArea=%d blobs=%d maxArea=%d (thresh=%.4f*%.2f, mean=%.4f, std=%.4f)\n', ...
+                nnz(rawDarkCand), nnz(cleanDark), numel(statsD), max(areasBeforeFilter), darkThresh, marginFactor, bgDarkMean, bgDarkStd);
+            fprintf('                       dark component areas: %s\n', mat2str(sort(areasBeforeFilter, 'descend')));
+        end
         validDarkIdx = [];
         for i = 1:numel(statsD)
             area_i = statsD(i).Area;
-            % Hemorrhages/MAs are moderately round or irregular blobs, not extremely long lines
-            if area_i <= maxDarkArea && statsD(i).Eccentricity < 0.96
+            % Hemorrhages/MAs are round or solid oval blobs (Eccentricity < 0.96 & Solidity > solidityCutoff)
+            if area_i <= maxDarkArea && statsD(i).Eccentricity < 0.96 && statsD(i).Solidity > solidityCutoff
                 darkLesionMask(statsD(i).PixelIdxList) = true;
                 validDarkIdx(end+1) = i;
             end
@@ -125,18 +166,22 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
         darkCount = numel(validDarkIdx);
     else
         darkCount = 0;
+        if isfield(cfg, 'debug') && cfg.debug
+            fprintf('[segmentLesions DEBUG] dark raw=%d afterArea=0 blobs=0 (thresh=%.4f*%.2f, mean=%.4f, std=%.4f)\n', ...
+                nnz(rawDarkCand), darkThresh, marginFactor, bgDarkMean, bgDarkStd);
+        end
     end
     if isfield(cfg, 'debug') && cfg.debug
-        fprintf('[segmentLesions] dark afterShape=%d\n', darkCount);
+        fprintf('[segmentLesions DEBUG] dark afterShape=%d\n', darkCount);
     end
 
     % ---------------------------------------------------------------------
     % 4. DETECT BRIGHT LESIONS (Hard Exudates & Cotton Wool Spots)
     % ---------------------------------------------------------------------
     % Exudates appear bright and yellowish (high in both Red & Green channels).
-    % Exclude the Optic Disc region (dilate OD mask to remove peripapillary halo).
+    % Exclude Optic Disc AND dilated vessel mask (vessel edges must not leak in as exudates).
     dilatedOD = imdilate(odMask, strel('disk', max(8, round(min(rows, cols) * 0.02))));
-    nonODMask = erodedMask & ~dilatedOD;
+    nonODMask = erodedMask & ~dilatedOD & ~dilatedVessels;
 
     % Top-hat transform highlights bright local extrema
     seBright = strel('disk', 10);
@@ -144,8 +189,32 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
     tophatRed   = imtophat(redCh, seBright);
     brightSignal = (0.6 * tophatGreen + 0.4 * tophatRed) .* nonODMask;
 
-    brightThresh = cfg.segment.lesion.brightSensitivity;
-    rawBrightCand = (brightSignal > brightThresh) & nonODMask;
+    % Yellowness gate: distinguish true yellow exudates from white/specular glare
+    yellownessMask = (redCh > 0.3) & (greenCh > 0.3) & ...
+        (blueCh < 0.6 * ((redCh + greenCh) / 2));
+    brightSignal = brightSignal .* yellownessMask;
+
+    % Statistical Adaptive Thresholding for Bright Lesions
+    bgBrightVals = brightSignal(nonODMask);
+    if isempty(bgBrightVals)
+        bgBrightMean = 0;
+        bgBrightStd = 0.01;
+    else
+        bgBrightMean = mean(bgBrightVals);
+        bgBrightStd = std(bgBrightVals);
+    end
+    brightThresh = bgBrightMean + cfg.segment.lesion.brightSensitivity * bgBrightStd;
+    rawBrightCand = (brightSignal > brightThresh * marginFactor) & nonODMask;
+
+    % Minimum Contrast-Above-Local-Surroundings Check:
+    % Large-radius opening (radius 30px ~ 3x seBright) computes local red/green background.
+    % Real focal exudates must stand out above immediate local retina by brightLocalMinContrast.
+    if isfield(cfg.segment.lesion, 'brightLocalMinContrast') && cfg.segment.lesion.brightLocalMinContrast > 0
+        seLocalBright = strel('disk', 30);
+        localBrightBg = (0.6 * imopen(greenCh, seLocalBright) + 0.4 * imopen(redCh, seLocalBright));
+        brightContrast = ((0.6 * greenCh + 0.4 * redCh) - localBrightBg) .* nonODMask;
+        rawBrightCand = rawBrightCand & (brightContrast >= cfg.segment.lesion.brightLocalMinContrast);
+    end
 
     minBrightArea = cfg.segment.lesion.brightMinSize;
     maxBrightArea = cfg.segment.lesion.brightMaxSize;
@@ -157,6 +226,12 @@ function [darkLesionMask, brightLesionMask, darkCount, brightCount, details] = .
 
     if brightCC.NumObjects > 0
         statsB = regionprops(brightCC, 'Area', 'Centroid', 'Eccentricity', 'PixelIdxList');
+        if isfield(cfg, 'debug') && cfg.debug
+            areasBeforeFilterB = [statsB.Area];
+            fprintf('[segmentLesions DEBUG] bright raw=%d afterArea=%d blobs=%d maxArea=%d (thresh=%.4f*%.2f, mean=%.4f, std=%.4f)\n', ...
+                nnz(rawBrightCand), nnz(cleanBright), numel(statsB), max(areasBeforeFilterB), brightThresh, marginFactor, bgBrightMean, bgBrightStd);
+            fprintf('                       bright component areas: %s\n', mat2str(sort(areasBeforeFilterB, 'descend')));
+        end
         validBrightIdx = [];
         for j = 1:numel(statsB)
             area_j = statsB(j).Area;
